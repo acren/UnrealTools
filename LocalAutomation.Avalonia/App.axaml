@@ -250,6 +250,51 @@
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="FontSize" Value="11" />
         </Style>
+        <!-- Filterable metric badges use button semantics while matching the compact graphite pill shape. -->
+        <Style Selector="Button.metric-filter-pill">
+            <Setter Property="Background" Value="{DynamicResource GraphiteCardBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteLineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource GraphiteTextMutedBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteTextMutedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource GraphiteTextBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.warning-accent:pointerover">
+            <Setter Property="BorderBrush" Value="#77F1D479" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.error-accent:pointerover">
+            <Setter Property="BorderBrush" Value="#88EF8680" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill:pressed">
+            <Setter Property="Background" Value="{DynamicResource GraphiteActiveBackgroundBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.active">
+            <Setter Property="Background" Value="{DynamicResource GraphiteActiveBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource GraphiteTextBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.warning-accent.active">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteWarningBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.error-accent.active">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteDangerBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.active:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource GraphiteTextBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.warning-accent.active:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteWarningBrush}" />
+        </Style>
+        <Style Selector="Button.metric-filter-pill.error-accent.active:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource GraphiteDangerBrush}" />
+        </Style>
         <Style Selector="Button.primary">
             <Setter Property="Background" Value="{DynamicResource GraphiteAccentBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource GraphiteAccentBrush}" />

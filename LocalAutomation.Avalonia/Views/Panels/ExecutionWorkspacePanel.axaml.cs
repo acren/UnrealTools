@@ -26,6 +26,8 @@ public partial class ExecutionWorkspacePanel : UserControl
     public ExecutionWorkspacePanel()
     {
         InitializeComponent();
+        AddHandler(ExecutionMetricsStrip.WarningFilterClickedEvent, HandleWarningFilterClicked);
+        AddHandler(ExecutionMetricsStrip.ErrorFilterClickedEvent, HandleErrorFilterClicked);
         DataContextChanged += HandleDataContextChanged;
     }
 
@@ -109,6 +111,55 @@ public partial class ExecutionWorkspacePanel : UserControl
         }
 
         viewModel.SelectGraphNode(viewModel.SelectedRuntimeTab, node);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Routes WARN badge clicks from the header or graph metric strips into the selected runtime log filter state.
+    /// </summary>
+    private void HandleWarningFilterClicked(object? sender, RoutedEventArgs e)
+    {
+        RouteMetricFilterClick(e, toggleWarningFilter: true);
+    }
+
+    /// <summary>
+    /// Routes ERR badge clicks from the header or graph metric strips into the selected runtime log filter state.
+    /// </summary>
+    private void HandleErrorFilterClicked(object? sender, RoutedEventArgs e)
+    {
+        RouteMetricFilterClick(e, toggleWarningFilter: false);
+    }
+
+    /// <summary>
+    /// Applies header badge clicks to the selected tab and graph badge clicks to the clicked node's log scope first.
+    /// </summary>
+    private void RouteMetricFilterClick(RoutedEventArgs e, bool toggleWarningFilter)
+    {
+        if (DataContext is not ExecutionWorkspaceViewModel viewModel || e.Source is not Control sourceControl)
+        {
+            return;
+        }
+
+        if (sourceControl.DataContext is ExecutionNodeViewModel graphNode)
+        {
+            if (toggleWarningFilter)
+            {
+                viewModel.ToggleGraphNodeWarningLogFilter(graphNode);
+            }
+            else
+            {
+                viewModel.ToggleGraphNodeErrorLogFilter(graphNode);
+            }
+        }
+        else if (toggleWarningFilter)
+        {
+            viewModel.ToggleSelectedRuntimeWarningLogFilter();
+        }
+        else
+        {
+            viewModel.ToggleSelectedRuntimeErrorLogFilter();
+        }
+
         e.Handled = true;
     }
 

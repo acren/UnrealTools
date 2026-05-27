@@ -170,9 +170,11 @@
                                                       DotSize="6"
                                                       LabelFontSize="11"
                                                       VerticalAlignment="Center" />
+                            <!-- Metric strip clicks bubble with this card's graph-node data context so the workspace can
+                                 select the task scope before toggling WARN or ERR filtering. -->
                             <controls:ExecutionMetricsStrip Grid.Row="2"
-                                                            Metrics="{Binding Task.Metrics}"
-                                                            VerticalAlignment="Center" />
+                                                             Metrics="{Binding Task.Metrics}"
+                                                             VerticalAlignment="Center" />
                         </Grid>
                     </controls:IntrinsicSizeHost>
              </Grid>

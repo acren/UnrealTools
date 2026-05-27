@@ -17,6 +17,10 @@ namespace LocalAutomation.Avalonia.ViewModels;
 public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
 {
     private bool _isSelected;
+    // The active warning filter belongs to this tab so execution sessions keep independent log filter choices.
+    private bool _isWarningLogFilterActive;
+    // The active error filter belongs to this tab and represents error plus critical log entries.
+    private bool _isErrorLogFilterActive;
     private ObservableCollection<LogEntryViewModel> _selectedLogEntries = new();
     private readonly Dictionary<RuntimeExecutionTaskId, ExecutionTaskViewModel> _tasksById = new();
 
@@ -85,6 +89,24 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     {
         get => _selectedLogEntries;
         private set => SetProperty(ref _selectedLogEntries, value);
+    }
+
+    /// <summary>
+    /// Gets whether the tab's WARN badge currently filters the visible log pane to warning entries.
+    /// </summary>
+    public bool IsWarningLogFilterActive
+    {
+        get => _isWarningLogFilterActive;
+        private set => SetProperty(ref _isWarningLogFilterActive, value);
+    }
+
+    /// <summary>
+    /// Gets whether the tab's ERR badge currently filters the visible log pane to error and critical entries.
+    /// </summary>
+    public bool IsErrorLogFilterActive
+    {
+        get => _isErrorLogFilterActive;
+        private set => SetProperty(ref _isErrorLogFilterActive, value);
     }
 
     /// <summary>
@@ -172,6 +194,22 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     public void SetSelectedLogEntries(System.Collections.Generic.IEnumerable<LogEntryViewModel> entries)
     {
         SelectedLogEntries = new ObservableCollection<LogEntryViewModel>(entries.ToList());
+    }
+
+    /// <summary>
+    /// Toggles the tab-local WARN severity filter used by the visible log pane.
+    /// </summary>
+    public void ToggleWarningLogFilter()
+    {
+        IsWarningLogFilterActive = !IsWarningLogFilterActive;
+    }
+
+    /// <summary>
+    /// Toggles the tab-local ERR severity filter used by the visible log pane.
+    /// </summary>
+    public void ToggleErrorLogFilter()
+    {
+        IsErrorLogFilterActive = !IsErrorLogFilterActive;
     }
 
     /// <summary>

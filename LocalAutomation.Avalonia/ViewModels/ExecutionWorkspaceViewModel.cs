@@ -163,6 +163,18 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     public ObservableCollection<LogEntryViewModel> SelectedRuntimeLogEntries => SelectedRuntimeTab?.SelectedLogEntries ?? EmptyLogEntries;
 
     /// <summary>
+    /// Gets whether the selected execution tab has the WARN severity filter enabled.
+    /// </summary>
+    public bool IsSelectedRuntimeWarningLogFilterActive => SelectedRuntimeTab?.ShowsRuntimeMetrics == true &&
+        SelectedRuntimeTab.IsWarningLogFilterActive;
+
+    /// <summary>
+    /// Gets whether the selected execution tab has the ERR severity filter enabled.
+    /// </summary>
+    public bool IsSelectedRuntimeErrorLogFilterActive => SelectedRuntimeTab?.ShowsRuntimeMetrics == true &&
+        SelectedRuntimeTab.IsErrorLogFilterActive;
+
+    /// <summary>
     /// Gets the stable logical source id for the currently displayed log stream so the reusable log viewer can reset
     /// follow-tail only when the user actually switches to a different source.
     /// </summary>
@@ -409,6 +421,84 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         _setStatus($"Cleared log output for {SelectedRuntimeTab.Title.ToLowerInvariant()}.");
         RaiseSelectedRuntimeLogStateChanged();
         RaisePropertyChanged(nameof(SelectedRuntimeMetrics));
+    }
+
+    /// <summary>
+    /// Toggles the selected execution tab's WARN severity filter and rebuilds the visible scoped log rows.
+    /// </summary>
+    public void ToggleSelectedRuntimeWarningLogFilter()
+    {
+        ToggleRuntimeSeverityFilter(graphNode: null, toggleWarningFilter: true);
+    }
+
+    /// <summary>
+    /// Toggles the selected execution tab's ERR severity filter and rebuilds the visible scoped log rows.
+    /// </summary>
+    public void ToggleSelectedRuntimeErrorLogFilter()
+    {
+        ToggleRuntimeSeverityFilter(graphNode: null, toggleWarningFilter: false);
+    }
+
+    /// <summary>
+    /// Selects a graph node as the log scope before toggling the WARN severity filter for the selected execution tab.
+    /// </summary>
+    public void ToggleGraphNodeWarningLogFilter(ExecutionNodeViewModel graphNode)
+    {
+        if (graphNode == null)
+        {
+            throw new ArgumentNullException(nameof(graphNode));
+        }
+
+        ToggleRuntimeSeverityFilter(graphNode, toggleWarningFilter: true);
+    }
+
+    /// <summary>
+    /// Selects a graph node as the log scope before toggling the ERR severity filter for the selected execution tab.
+    /// </summary>
+    public void ToggleGraphNodeErrorLogFilter(ExecutionNodeViewModel graphNode)
+    {
+        if (graphNode == null)
+        {
+            throw new ArgumentNullException(nameof(graphNode));
+        }
+
+        ToggleRuntimeSeverityFilter(graphNode, toggleWarningFilter: false);
+    }
+
+    /// <summary>
+    /// Toggles one selected-tab severity filter, optionally selecting a graph node first so graph badge clicks scope the
+    /// log pane to the task or group that rendered the clicked metric strip.
+    /// </summary>
+    private void ToggleRuntimeSeverityFilter(ExecutionNodeViewModel? graphNode, bool toggleWarningFilter)
+    {
+        RuntimeWorkspaceTabViewModel? selectedTab = SelectedRuntimeTab;
+        if (selectedTab?.ShowsRuntimeMetrics != true)
+        {
+            return;
+        }
+
+        if (graphNode != null)
+        {
+            selectedTab.Graph.SelectNode(graphNode);
+        }
+
+        if (toggleWarningFilter)
+        {
+            selectedTab.ToggleWarningLogFilter();
+        }
+        else
+        {
+            selectedTab.ToggleErrorLogFilter();
+        }
+
+        RebuildTabSelectedLogEntries(selectedTab);
+        if (graphNode != null)
+        {
+            RaiseSelectedGraphSelectionStateChanged();
+            return;
+        }
+
+        RaiseSelectedRuntimeLogStateChanged();
     }
 
     /// <summary>
@@ -725,10 +815,11 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
 
         if (runtimeTab.IsApplicationLog)
         {
-            List<LogEntryViewModel> applicationEntries = ApplicationLogService.LogStream.Entries.Select(CreateLogEntryViewModel).ToList();
+            List<LogEntry> applicationScopedEntries = ApplicationLogService.LogStream.Entries.ToList();
+            List<LogEntryViewModel> applicationEntries = applicationScopedEntries.Select(CreateLogEntryViewModel).ToList();
             activity.SetTag("log.source", "application")
                 .SetTag("selected.task.count", 0)
-                .SetTag("session.entry.count", applicationEntries.Count)
+                .SetTag("session.entry.count", applicationScopedEntries.Count)
                 .SetTag("visible.entry.count", applicationEntries.Count);
             runtimeTab.SetSelectedLogEntries(applicationEntries);
             return;
@@ -744,38 +835,64 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             return;
         }
 
+        List<LogEntry> sessionEntries = runtimeTab.Session.LogStream.Entries.ToList();
         IReadOnlyList<RuntimeExecutionTaskId> selectedTaskIds = runtimeTab.Graph.GetSelectedLogTaskIds();
-        int sessionEntryCount = runtimeTab.Session.LogStream.Entries.Count;
+        int sessionEntryCount = sessionEntries.Count;
+        List<LogEntry> scopedEntries;
+        string logSource;
+        int selectedTaskCount;
         if (selectedTaskIds.Count == 0)
         {
-            List<LogEntryViewModel> sessionEntries = runtimeTab.Session.LogStream.Entries.Select(CreateLogEntryViewModel).ToList();
-            activity.SetTag("log.source", "session")
-                .SetTag("selected.task.count", 0)
-                .SetTag("session.entry.count", sessionEntryCount)
-                .SetTag("visible.entry.count", sessionEntries.Count);
-            runtimeTab.SetSelectedLogEntries(sessionEntries);
-            return;
+            scopedEntries = sessionEntries;
+            logSource = "session";
+            selectedTaskCount = 0;
+        }
+        else
+        {
+            HashSet<RuntimeExecutionTaskId> selectedTaskIdSet = new(selectedTaskIds);
+            bool selectedScopeIncludesRoot = selectedTaskIdSet.Contains(runtimeTab.Session.RootTask.Id);
+            scopedEntries = sessionEntries
+                .Where(entry =>
+                {
+                    RuntimeExecutionTaskId? taskId = RuntimeExecutionTaskId.FromNullable(entry.TaskId);
+                    /* Session-level entries describe the whole run rather than one task. Show them only with the root scope so
+                       root selection behaves like the session overview without adding session noise to child-task logs. */
+                    return taskId == null
+                        ? selectedScopeIncludesRoot
+                        : selectedTaskIdSet.Contains(taskId.Value);
+                })
+                .ToList();
+            logSource = "selection";
+            selectedTaskCount = selectedTaskIdSet.Count;
         }
 
-        HashSet<RuntimeExecutionTaskId> selectedTaskIdSet = new(selectedTaskIds);
-        bool selectedScopeIncludesRoot = selectedTaskIdSet.Contains(runtimeTab.Session.RootTask.Id);
-        List<LogEntryViewModel> filteredEntries = runtimeTab.Session.LogStream.Entries
-            .Where(entry =>
-            {
-                RuntimeExecutionTaskId? taskId = RuntimeExecutionTaskId.FromNullable(entry.TaskId);
-                /* Session-level entries describe the whole run rather than one task. Show them only with the root scope so
-                   root selection behaves like the session overview without adding session noise to child-task logs. */
-                return taskId == null
-                    ? selectedScopeIncludesRoot
-                    : selectedTaskIdSet.Contains(taskId.Value);
-            })
+        IEnumerable<LogEntry> visibleRawEntries = scopedEntries
+            .Where(entry => MatchesActiveSeverityFilters(runtimeTab, entry));
+        List<LogEntryViewModel> visibleEntries = visibleRawEntries
             .Select(CreateLogEntryViewModel)
             .ToList();
-        activity.SetTag("log.source", "selection")
-            .SetTag("selected.task.count", selectedTaskIdSet.Count)
+        activity.SetTag("log.source", logSource)
+            .SetTag("selected.task.count", selectedTaskCount)
             .SetTag("session.entry.count", sessionEntryCount)
-            .SetTag("visible.entry.count", filteredEntries.Count);
-        runtimeTab.SetSelectedLogEntries(filteredEntries);
+            .SetTag("visible.entry.count", visibleEntries.Count);
+        runtimeTab.SetSelectedLogEntries(visibleEntries);
+    }
+
+    /// <summary>
+    /// Returns whether one scoped raw log entry should remain visible under the tab's active WARN and ERR filters.
+    /// </summary>
+    private static bool MatchesActiveSeverityFilters(RuntimeWorkspaceTabViewModel runtimeTab, LogEntry entry)
+    {
+        bool warningFilterActive = runtimeTab.IsWarningLogFilterActive;
+        bool errorFilterActive = runtimeTab.IsErrorLogFilterActive;
+        if (!warningFilterActive && !errorFilterActive)
+        {
+            return true;
+        }
+
+        bool matchesWarning = warningFilterActive && entry.Verbosity == LogLevel.Warning;
+        bool matchesError = errorFilterActive && (entry.Verbosity == LogLevel.Error || entry.Verbosity == LogLevel.Critical);
+        return matchesWarning || matchesError;
     }
 
     /// <summary>
@@ -991,6 +1108,17 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             return;
         }
 
+        if (string.Equals(propertyName, nameof(RuntimeWorkspaceTabViewModel.IsWarningLogFilterActive), StringComparison.Ordinal) ||
+            string.Equals(propertyName, nameof(RuntimeWorkspaceTabViewModel.IsErrorLogFilterActive), StringComparison.Ordinal))
+        {
+            activity.SetTag("action", "RaiseSelectedRuntimeSeverityFilters");
+            RaiseWorkspaceProperties(
+                "ExecutionWorkspace.RaiseSelectedRuntimeSeverityFilters",
+                nameof(IsSelectedRuntimeWarningLogFilterActive),
+                nameof(IsSelectedRuntimeErrorLogFilterActive));
+            return;
+        }
+
         if (string.Equals(propertyName, nameof(RuntimeWorkspaceTabViewModel.IsRunning), StringComparison.Ordinal))
         {
             activity.SetTag("action", "RaiseSelectedRuntimeHeaderState");
@@ -1018,6 +1146,8 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             nameof(IsRunning),
             nameof(SelectedRuntimeMetrics),
             nameof(SelectedRuntimeLogEntries),
+            nameof(IsSelectedRuntimeWarningLogFilterActive),
+            nameof(IsSelectedRuntimeErrorLogFilterActive),
             nameof(SelectedRuntimeLogSourceId),
             nameof(ShowSelectedRuntimeMetrics));
     }
@@ -1054,7 +1184,9 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     {
         RaiseWorkspaceProperties(
             "ExecutionWorkspace.RaiseSelectedRuntimeLogStateChanged",
-            nameof(SelectedRuntimeLogEntries));
+            nameof(SelectedRuntimeLogEntries),
+            nameof(IsSelectedRuntimeWarningLogFilterActive),
+            nameof(IsSelectedRuntimeErrorLogFilterActive));
     }
 
     /// <summary>
@@ -1067,6 +1199,8 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             "ExecutionWorkspace.RaiseSelectedGraphSelectionStateChanged",
             nameof(SelectedRuntimeMetrics),
             nameof(SelectedRuntimeLogEntries),
+            nameof(IsSelectedRuntimeWarningLogFilterActive),
+            nameof(IsSelectedRuntimeErrorLogFilterActive),
             nameof(SelectedRuntimeLogSourceId));
     }
 

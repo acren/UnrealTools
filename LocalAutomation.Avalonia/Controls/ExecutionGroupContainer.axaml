@@ -168,10 +168,12 @@
                                                    DotSize="6"
                                                    LabelFontSize="11"
                                                    VerticalAlignment="Center" />
+                        <!-- Metric strip clicks bubble with this group node's data context so the workspace can select
+                             the group scope before toggling WARN or ERR filtering. -->
                         <controls:ExecutionMetricsStrip Grid.Column="2"
-                                                        Margin="12,0,0,0"
-                                                        Metrics="{Binding Task.Metrics}"
-                                                        VerticalAlignment="Center" />
+                                                         Margin="12,0,0,0"
+                                                         Metrics="{Binding Task.Metrics}"
+                                                         VerticalAlignment="Center" />
                     </Grid>
                 </controls:IntrinsicSizeHost>
             </Border>
