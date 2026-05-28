@@ -62,7 +62,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             handleSaveException: HandleSessionSaveException);
         _targetOptionValuesSaver = new DebouncedBackgroundSaver<PersistedSettingsWriteBatch>(
             debounceDelay: SessionSaveDebounceDelay,
-            saveState: _services.OptionValues.SaveCapturedSettings,
+            saveState: _services.SettingsBatchSaver.Save,
             mergeStates: static (earlier, later) => earlier.Merge(later),
             handleSaveException: HandleTargetSettingsSaveException);
         _parameterSession.PropertyChanged += HandleOperationParametersChanged;
@@ -445,8 +445,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             return new PersistedSettingsWriteBatch();
         }
 
-        TargetSettingsContext context = _services.OptionValues.CreateTargetContext(_services.Targets, target);
-        return _services.OptionValues.CaptureOptionValues(_parameterSession.OptionSets, context);
+        return _services.OperationSession.CaptureOptionValues(_parameterSession.OptionSets, target);
     }
 
     /// <summary>
@@ -589,7 +588,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             TargetSessionSnapshot snapshot = _sessionPersistence.CreateTargetSnapshot(item.Target);
             snapshot.TypedTargetTypeId = _services.Targets.GetTargetTypeId(item.Target) ?? snapshot.TypedTargetTypeId;
             snapshot.Path = _services.Targets.GetTargetPath(item.Target);
-            snapshot.TypedKey = _sessionPersistence.BuildTargetKey(snapshot.TypedTargetTypeId, snapshot.Path);
+            snapshot.TypedKey = TargetKeyUtility.BuildTargetKey(snapshot.TypedTargetTypeId, snapshot.Path);
             return snapshot;
         }).ToList();
         _sessionSnapshot.TypedSelectedTargetKey = Target.SelectedTarget?.Target == null ? null : _sessionPersistence.CreateTargetSnapshot(Target.SelectedTarget.Target).TypedKey;
@@ -929,10 +928,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ApplyPersistedSettings");
 
-        TargetSettingsContext context = _services.OptionValues.CreateTargetContext(_services.Targets, SelectedTarget.Target);
-        activity.SetTag("target.type", context.TargetTypeId.Value)
+        TargetTypeId? targetTypeId = _services.Targets.GetTargetTypeId(SelectedTarget.Target);
+        if (targetTypeId == null)
+        {
+            return;
+        }
+
+        activity.SetTag("target.type", targetTypeId.Value.Value)
             .SetTag("count", _parameterSession.OptionSets.Count);
-        _services.OptionValues.ApplyOptionValues(_parameterSession.OptionSets, context);
+        _services.OperationSession.ApplyOptionValues(_parameterSession.OptionSets, SelectedTarget.Target);
 
         // Recreate property-grid card targets after applying restored values so adapter-backed editors reflect the
         // rehydrated state instead of the pre-apply values captured when the cards were first created.

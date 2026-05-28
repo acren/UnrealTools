@@ -9,6 +9,7 @@ using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("engineVersion")]
     public partial class EngineVersionOptions : OperationOptions
     {
         public override int SortIndex => 10;

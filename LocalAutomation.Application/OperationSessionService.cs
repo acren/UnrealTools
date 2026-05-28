@@ -14,14 +14,61 @@ namespace LocalAutomation.Application;
 /// </summary>
 public sealed class OperationSessionService
 {
+    // Option settings persistence is owned by the operation-session system because option values belong to operation sessions.
+    private readonly OptionSettingsPersistence _optionSettings;
+    // The operation catalog supplies selection and execution metadata for operation-session behavior.
     private readonly OperationCatalogService _catalog;
 
     /// <summary>
-    /// Creates an operation session service from the shared catalog.
+    /// Creates an operation session service from the shared catalog and persistence plumbing it owns internally.
     /// </summary>
-    public OperationSessionService(OperationCatalogService catalog)
+    internal OperationSessionService(
+        OperationCatalogService catalog,
+        LayeredSettingsPersistenceEngine engine,
+        SettingsLayerDefinitionProvider layerDefinitions,
+        ExtensionCatalog extensionCatalog,
+        TargetDiscoveryService targets,
+        PersistedSettingsBatchSaver batchSaver)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        _optionSettings = new OptionSettingsPersistence(
+            engine ?? throw new ArgumentNullException(nameof(engine)),
+            layerDefinitions ?? throw new ArgumentNullException(nameof(layerDefinitions)),
+            extensionCatalog ?? throw new ArgumentNullException(nameof(extensionCatalog)),
+            targets ?? throw new ArgumentNullException(nameof(targets)),
+            batchSaver ?? throw new ArgumentNullException(nameof(batchSaver)));
+    }
+
+    /// <summary>
+    /// Applies effective target-scoped persisted values to the provided live option-set owners.
+    /// </summary>
+    public void ApplyOptionValues(IEnumerable<object> optionSets, IOperationTarget? target)
+    {
+        _optionSettings.ApplyOptionValues(optionSets, target);
+    }
+
+    /// <summary>
+    /// Captures target-scoped option-set values into a detached sparse write batch.
+    /// </summary>
+    public PersistedSettingsWriteBatch CaptureOptionValues(IEnumerable<object> optionSets, IOperationTarget? target)
+    {
+        return _optionSettings.CaptureOptionValues(optionSets, target);
+    }
+
+    /// <summary>
+    /// Captures and immediately saves target-scoped option-set values for callers that do not need deferred writes.
+    /// </summary>
+    public void SaveOptionValues(IEnumerable<object> optionSets, IOperationTarget? target)
+    {
+        _optionSettings.SaveOptionValues(optionSets, target);
+    }
+
+    /// <summary>
+    /// Returns option descriptor sets for startup key validation.
+    /// </summary>
+    internal IEnumerable<(string OwnerLabel, IReadOnlyList<PersistedSettingDescriptor> Descriptors)> GetGeneratedKeyDescriptors()
+    {
+        return _optionSettings.GetGeneratedKeyDescriptors();
     }
 
     /// <summary>

@@ -4,6 +4,7 @@ using LocalAutomation.Runtime;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("pluginDeploy")]
     public partial class PluginDeployOptions : OperationOptions
     {
         public override int SortIndex => 80;

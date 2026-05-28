@@ -5,6 +5,7 @@ using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("buildConfiguration")]
     public partial class BuildConfigurationOptions : OperationOptions
     {
         public override int SortIndex => 20;

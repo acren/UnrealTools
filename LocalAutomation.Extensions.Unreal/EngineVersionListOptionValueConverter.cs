@@ -10,7 +10,7 @@ namespace LocalAutomation.Extensions.Unreal;
 /// <summary>
 /// Persists engine-version lists as stable version strings instead of live runtime objects.
 /// </summary>
-public sealed class EngineVersionListOptionValueConverter : IOptionValueConverter
+public sealed class EngineVersionListOptionValueConverter : ISettingValueConverter
 {
     /// <summary>
     /// Gets the stable converter identifier.

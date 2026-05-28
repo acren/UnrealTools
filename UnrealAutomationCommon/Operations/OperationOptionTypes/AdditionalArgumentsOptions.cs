@@ -8,6 +8,7 @@ namespace UnrealAutomationCommon.Operations.OperationOptionTypes;
 /// Stores freeform pass-through arguments as a normal option set so newer UIs can render it through the same option
 /// pipeline as the rest of the operation configuration.
 /// </summary>
+[PersistedSettings("additionalArguments")]
 public sealed partial class AdditionalArgumentsOptions : OperationOptions
 {
     /// <summary>

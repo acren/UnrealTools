@@ -27,16 +27,16 @@ public sealed class SettingsWindowViewModel : ViewModelBase, IDisposable
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _settingsSaver = new DebouncedBackgroundSaver<PersistedSettingsWriteBatch>(
             debounceDelay: SaveDebounceDelay,
-            saveState: _services.OptionValues.SaveCapturedSettings,
+            saveState: _services.SettingsBatchSaver.Save,
             mergeStates: static (earlier, later) => earlier.Merge(later),
             handleSaveException: HandleSaveException);
-        _services.ApplicationSettings.PropertyChanged += HandleApplicationSettingsChanged;
+        _services.ApplicationSettingsService.Settings.PropertyChanged += HandleApplicationSettingsChanged;
     }
 
     /// <summary>
     /// Gets the shared application settings object rendered directly by the property grid.
     /// </summary>
-    public object Settings => _services.ApplicationSettings;
+    public object Settings => _services.ApplicationSettingsService.Settings;
 
     /// <summary>
     /// Saves any pending settings changes immediately.
@@ -44,7 +44,7 @@ public sealed class SettingsWindowViewModel : ViewModelBase, IDisposable
     public void FlushPendingSave()
     {
         // Capture one last detached batch before closing so the background saver persists the latest in-memory state.
-        _settingsSaver.Flush(_services.OptionValues.CaptureGlobalSettings(_services.ApplicationSettings));
+        _settingsSaver.Flush(_services.ApplicationSettingsService.Capture());
     }
 
     /// <summary>
@@ -58,7 +58,7 @@ public sealed class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
-        _services.ApplicationSettings.PropertyChanged -= HandleApplicationSettingsChanged;
+        _services.ApplicationSettingsService.Settings.PropertyChanged -= HandleApplicationSettingsChanged;
         _settingsSaver.Dispose();
     }
 
@@ -69,15 +69,15 @@ public sealed class SettingsWindowViewModel : ViewModelBase, IDisposable
     {
         // Apply runtime-facing settings immediately so the shell reflects telemetry and output-path updates without
         // requiring a restart.
-        _services.ApplyApplicationSettings();
+        _services.ApplicationSettingsService.Apply();
 
         PerformanceTelemetryListener.Start(
-            _services.ApplicationSettings.EnablePerformanceTelemetry,
-            TimeSpan.FromMilliseconds(_services.ApplicationSettings.MinimumPerformanceTelemetryMilliseconds),
-            TimeSpan.FromMilliseconds(_services.ApplicationSettings.MinimumVisiblePerformanceTelemetryScopeMilliseconds));
+            _services.ApplicationSettingsService.Settings.EnablePerformanceTelemetry,
+            TimeSpan.FromMilliseconds(_services.ApplicationSettingsService.Settings.MinimumPerformanceTelemetryMilliseconds),
+            TimeSpan.FromMilliseconds(_services.ApplicationSettingsService.Settings.MinimumVisiblePerformanceTelemetryScopeMilliseconds));
         // Capture a detached persisted-value batch immediately so the background saver never touches the live settings
         // object after the UI continues processing.
-        _settingsSaver.RequestSave(_services.OptionValues.CaptureGlobalSettings(_services.ApplicationSettings));
+        _settingsSaver.RequestSave(_services.ApplicationSettingsService.Capture());
     }
 
     /// <summary>

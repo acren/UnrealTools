@@ -59,9 +59,9 @@ public partial class App : AvaloniaApplication
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             PerformanceTelemetryListener.Start(
-                Services.ApplicationSettings.EnablePerformanceTelemetry,
-                System.TimeSpan.FromMilliseconds(Services.ApplicationSettings.MinimumPerformanceTelemetryMilliseconds),
-                System.TimeSpan.FromMilliseconds(Services.ApplicationSettings.MinimumVisiblePerformanceTelemetryScopeMilliseconds));
+                Services.ApplicationSettingsService.Settings.EnablePerformanceTelemetry,
+                System.TimeSpan.FromMilliseconds(Services.ApplicationSettingsService.Settings.MinimumPerformanceTelemetryMilliseconds),
+                System.TimeSpan.FromMilliseconds(Services.ApplicationSettingsService.Settings.MinimumVisiblePerformanceTelemetryScopeMilliseconds));
             MainWindow mainWindow = new();
             mainWindow.Title = ShellIdentity.WindowTitle;
             desktop.MainWindow = mainWindow;

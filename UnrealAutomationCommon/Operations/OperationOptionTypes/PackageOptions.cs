@@ -4,6 +4,7 @@ using LocalAutomation.Runtime;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("package")]
     public partial class PackageOptions : OperationOptions
     {
         public override int SortIndex => 60;

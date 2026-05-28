@@ -60,7 +60,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         _pendingLogFlushTimer.Tick += HandlePendingLogFlushTimerTick;
         _runtimeDurationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _runtimeDurationTimer.Tick += HandleRuntimeDurationTimerTick;
-        _services.ApplicationSettings.PropertyChanged += HandleApplicationSettingsChanged;
+        _services.ApplicationSettingsService.Settings.PropertyChanged += HandleApplicationSettingsChanged;
 
         RuntimeTabs.Add(CreateApplicationLogTab());
         RuntimeTabs.Add(CreatePlanPreviewTab());
@@ -1239,7 +1239,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private ExecutionGraphViewModel CreateExecutionGraphViewModel()
     {
         ExecutionGraphViewModel graph = new();
-        graph.SetRevealHiddenTasks(_services.ApplicationSettings.RevealHiddenTasks);
+        graph.SetRevealHiddenTasks(_services.ApplicationSettingsService.Settings.RevealHiddenTasks);
         return graph;
     }
 
@@ -1254,7 +1254,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             return;
         }
 
-        bool revealHiddenTasks = _services.ApplicationSettings.RevealHiddenTasks;
+        bool revealHiddenTasks = _services.ApplicationSettingsService.Settings.RevealHiddenTasks;
         foreach (RuntimeWorkspaceTabViewModel tab in RuntimeTabs)
         {
             tab.Graph.SetRevealHiddenTasks(revealHiddenTasks);

@@ -105,22 +105,6 @@ public sealed class SessionPersistenceService
     }
 
     /// <summary>
-    /// Builds the stable key used to persist target-scoped UI state.
-    /// </summary>
-    public TargetKey BuildTargetKey(TargetTypeId targetTypeId, string targetPath)
-    {
-        return TargetKeyUtility.BuildTargetKey(targetTypeId, targetPath);
-    }
-
-    /// <summary>
-    /// Builds the stable key used to persist target-scoped UI state from serialized values.
-    /// </summary>
-    public string BuildTargetKey(string targetTypeId, string targetPath)
-    {
-        return BuildTargetKey(new TargetTypeId(targetTypeId), targetPath).Value;
-    }
-
-    /// <summary>
     /// Creates or updates a persisted target snapshot from the provided runtime target.
     /// </summary>
     public TargetSessionSnapshot CreateTargetSnapshot(IOperationTarget target)
@@ -129,7 +113,7 @@ public sealed class SessionPersistenceService
         string targetPath = _services.Targets.GetTargetPath(target);
         return new TargetSessionSnapshot
         {
-            Key = BuildTargetKey(targetTypeId, targetPath).Value,
+            Key = TargetKeyUtility.BuildTargetKey(targetTypeId, targetPath).Value,
             TargetTypeId = targetTypeId.Value,
             Path = targetPath
         };
@@ -182,7 +166,7 @@ public sealed class SessionPersistenceService
             string targetPath = _services.Targets.GetTargetPath(target);
             snapshot.Targets.Add(new TargetSessionSnapshot
             {
-                Key = BuildTargetKey(targetTypeId.Value, targetPath).Value,
+                Key = TargetKeyUtility.BuildTargetKey(targetTypeId.Value, targetPath).Value,
                 TargetTypeId = targetTypeId.Value.Value,
                 Path = targetPath
             });
@@ -212,8 +196,7 @@ public sealed class SessionPersistenceService
         selectedRuntimeTarget ??= legacyState.Targets.OfType<IOperationTarget>().FirstOrDefault();
         if (selectedRuntimeTarget != null)
         {
-            TargetSettingsContext context = _services.OptionValues.CreateTargetContext(_services.Targets, selectedRuntimeTarget);
-            _services.OptionValues.SaveOptionValues(legacyState.OptionsInstances.Cast<object>(), context);
+            _services.OperationSession.SaveOptionValues(legacyState.OptionsInstances.Cast<object>(), selectedRuntimeTarget);
         }
 
         snapshot.SelectedTargetKey = selectedTarget.Key;

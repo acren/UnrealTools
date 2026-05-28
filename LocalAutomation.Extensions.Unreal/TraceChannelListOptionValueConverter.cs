@@ -10,7 +10,7 @@ namespace LocalAutomation.Extensions.Unreal;
 /// <summary>
 /// Persists trace-channel selections as stable channel keys instead of live binding-list objects.
 /// </summary>
-public sealed class TraceChannelListOptionValueConverter : IOptionValueConverter
+public sealed class TraceChannelListOptionValueConverter : ISettingValueConverter
 {
     /// <summary>
     /// Gets the stable converter identifier.

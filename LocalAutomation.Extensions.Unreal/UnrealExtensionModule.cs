@@ -48,8 +48,8 @@ public sealed class UnrealExtensionModule : IExtensionModule
 
         RegisterLegacyLoggerBridge();
         registry.RegisterTargetFactory(new UnrealPathTargetFactory());
-        registry.RegisterOptionValueConverter(new EngineVersionListOptionValueConverter());
-        registry.RegisterOptionValueConverter(new TraceChannelListOptionValueConverter());
+        registry.RegisterSettingValueConverter(new EngineVersionListOptionValueConverter());
+        registry.RegisterSettingValueConverter(new TraceChannelListOptionValueConverter());
         RegisterContextActions(registry);
     }
 

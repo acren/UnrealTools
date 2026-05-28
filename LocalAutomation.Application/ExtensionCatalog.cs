@@ -16,7 +16,7 @@ public sealed class ExtensionCatalog : IExtensionRegistry
     private IExtensionModule? _currentRegisteringModule;
     private readonly List<IExtensionModule> _modules = new();
     private readonly List<IOptionEditorAdapter> _optionEditorAdapters = new();
-    private readonly List<IOptionValueConverter> _optionValueConverters = new();
+    private readonly List<ISettingValueConverter> _settingValueConverters = new();
     private readonly List<OperationDescriptor> _operations = new();
     private readonly List<TargetDescriptor> _targets = new();
     private readonly List<ITargetFactory> _targetFactories = new();
@@ -52,9 +52,9 @@ public sealed class ExtensionCatalog : IExtensionRegistry
     public IReadOnlyList<IOptionEditorAdapter> OptionEditorAdapters => _optionEditorAdapters;
 
     /// <summary>
-    /// Gets the registered option value converters.
+    /// Gets the registered setting value converters.
     /// </summary>
-    public IReadOnlyList<IOptionValueConverter> OptionValueConverters => _optionValueConverters;
+    public IReadOnlyList<ISettingValueConverter> SettingValueConverters => _settingValueConverters;
 
     /// <summary>
     /// Registers a module once and lets it contribute its descriptors through the shared registry interface.
@@ -177,17 +177,17 @@ public sealed class ExtensionCatalog : IExtensionRegistry
     }
 
     /// <summary>
-    /// Registers an option value converter after checking that its identifier is unique.
+    /// Registers a setting value converter after checking that its identifier is unique.
     /// </summary>
-    public void RegisterOptionValueConverter(IOptionValueConverter converter)
+    public void RegisterSettingValueConverter(ISettingValueConverter converter)
     {
         if (converter == null)
         {
             throw new ArgumentNullException(nameof(converter));
         }
 
-        EnsureUniqueId(converter.Id, _optionValueConverters, static item => item.Id, nameof(converter));
-        _optionValueConverters.Add(converter);
+        EnsureUniqueId(converter.Id, _settingValueConverters, static item => item.Id, nameof(converter));
+        _settingValueConverters.Add(converter);
         RecordAssemblyOwner(converter.GetType().Assembly);
     }
 

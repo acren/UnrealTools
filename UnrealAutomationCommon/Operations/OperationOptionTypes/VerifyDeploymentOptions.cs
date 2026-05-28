@@ -4,6 +4,7 @@ using LocalAutomation.Runtime;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("verifyDeployment")]
     public partial class VerifyDeploymentOptions : OperationOptions
     {
         public override int SortIndex => 80;

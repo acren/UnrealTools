@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 
@@ -28,16 +29,20 @@ public sealed class LocalAutomationApplicationHost
         ContextActions = new ContextActionService(catalog);
         Execution = new ExecutionSessionService(executionLogDirectory);
         OptionEditors = new OptionEditorService(catalog);
-        OptionValues = new LayeredSettingsPersistenceService(catalog, resolvedAppDataRootPath, resolvedTargetSettingsFileName);
-        ApplicationSettings = new ApplicationSettings(defaultOutputRootPath, defaultTempRootPath);
-        OptionValues.ApplyGlobalSettings(ApplicationSettings);
-        /* Startup needs the persisted temp-root override in place before stale-session cleanup runs so cleanup scans the
-           correct per-host session folder exactly once when the application host is created. */
-        ApplyApplicationSettings();
-        CleanupStaleSessionTempRoots();
-        Operations = new OperationCatalogService(catalog);
-        OperationSession = new OperationSessionService(Operations);
         Targets = new TargetDiscoveryService(catalog);
+        SettingsLayerDefinitionProvider layerDefinitionProvider = new(resolvedAppDataRootPath, resolvedTargetSettingsFileName);
+        LayeredSettingsPersistenceEngine settingsEngine = new(catalog.SettingValueConverters);
+        SettingsBatchSaver = new PersistedSettingsBatchSaver(settingsEngine);
+        Operations = new OperationCatalogService(catalog);
+        OperationSession = new OperationSessionService(Operations, settingsEngine, layerDefinitionProvider, Catalog, Targets, SettingsBatchSaver);
+        ApplicationSettingsService = new ApplicationSettingsService(settingsEngine, layerDefinitionProvider, defaultOutputRootPath, defaultTempRootPath);
+        TargetSettingsService = new TargetSettingsService(settingsEngine, layerDefinitionProvider, Targets, SettingsBatchSaver);
+        PersistedSettingKeyValidator.Validate(
+            OperationSession.GetGeneratedKeyDescriptors()
+                .Concat(ApplicationSettingsService.GetGeneratedKeyDescriptors())
+                .Concat(TargetSettingsService.GetGeneratedKeyDescriptors()));
+        // Startup needs the persisted temp-root override in place before stale-session cleanup scans session folders.
+        CleanupStaleSessionTempRoots();
     }
 
     /// <summary>
@@ -66,21 +71,6 @@ public sealed class LocalAutomationApplicationHost
     public OptionEditorService OptionEditors { get; }
 
     /// <summary>
-    /// Gets the shared host-global application settings instance.
-    /// </summary>
-    public ApplicationSettings ApplicationSettings { get; }
-
-    /// <summary>
-    /// Applies the current application settings to host-wide runtime services that need immediate updates while leaving
-    /// startup-only maintenance work to the host-construction path.
-    /// </summary>
-    public void ApplyApplicationSettings()
-    {
-        OutputPaths.SetRoot(ApplicationSettings.OutputRootPath);
-        OutputPaths.SetTempRoot(ApplicationSettings.TempRootPath);
-    }
-
-    /// <summary>
     /// Deletes stale per-session temp roots left behind by prior crashes or abrupt exits so temp usage does not grow
     /// without bound across launches.
     /// </summary>
@@ -106,9 +96,19 @@ public sealed class LocalAutomationApplicationHost
     }
 
     /// <summary>
-    /// Gets the service used to capture and reapply stable option values for persistence.
+    /// Gets the shared batch saver used by debounced UI persistence requests.
     /// </summary>
-    public LayeredSettingsPersistenceService OptionValues { get; }
+    public PersistedSettingsBatchSaver SettingsBatchSaver { get; }
+
+    /// <summary>
+    /// Gets the service that owns host-wide application settings behavior.
+    /// </summary>
+    public ApplicationSettingsService ApplicationSettingsService { get; }
+
+    /// <summary>
+    /// Gets the service that owns target settings behavior.
+    /// </summary>
+    public TargetSettingsService TargetSettingsService { get; }
 
     /// <summary>
     /// Gets the service used to derive selected-operation UI state from the shared catalog and runtime adapters.

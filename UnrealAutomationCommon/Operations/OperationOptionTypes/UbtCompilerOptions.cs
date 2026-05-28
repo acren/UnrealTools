@@ -19,6 +19,7 @@ namespace UnrealAutomationCommon.Operations.OperationOptionTypes
         Cpp20
     }
 
+    [PersistedSettings("ubtCompiler")]
     public partial class UbtCompilerOptions : OperationOptions
     {
         public override int SortIndex => 30;

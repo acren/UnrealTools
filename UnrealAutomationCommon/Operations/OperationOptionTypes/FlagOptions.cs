@@ -4,6 +4,7 @@ using LocalAutomation.Runtime;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("flag")]
     public partial class FlagOptions : OperationOptions
     {
         public override int SortIndex => 40;

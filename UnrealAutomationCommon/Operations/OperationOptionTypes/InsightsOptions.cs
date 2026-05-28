@@ -9,6 +9,7 @@ using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("insights")]
     public partial class InsightsOptions : OperationOptions
     {
         public override int SortIndex => 30;

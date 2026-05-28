@@ -5,6 +5,7 @@ using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon.Operations.OperationOptionTypes
 {
+    [PersistedSettings("cook")]
     public partial class CookOptions : OperationOptions
     {
         public override int SortIndex => 30;
