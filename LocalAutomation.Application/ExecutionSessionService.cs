@@ -17,8 +17,6 @@ public sealed class ExecutionSessionService
 {
     // Tracks live and completed execution sessions in display order for application hosts.
     private readonly List<LocalAutomation.Runtime.ExecutionSession> _sessions = new();
-    // Stores durable log-file paths for sessions whose output is mirrored to disk.
-    private readonly Dictionary<RuntimeExecutionSessionId, string> _sessionLogFilePaths = new();
     // Holds the optional directory where each execution session writes its own durable log file.
     private readonly string? _sessionLogDirectory;
 
@@ -54,12 +52,8 @@ public sealed class ExecutionSessionService
         BufferedLogStream logStream = new();
         LocalAutomation.Runtime.ExecutionPlan plan = ExecutionPlanFactory.BuildPlan(operation, parameters)
             ?? throw new InvalidOperationException($"Operation '{operation.OperationName}' did not produce an execution plan.");
-        LocalAutomation.Runtime.ExecutionSession session = new(logStream, plan);
-        ExecutionSessionLogWriter? logWriter = ExecutionSessionLogWriter.TryAttach(session, _sessionLogDirectory);
-        if (logWriter != null)
-        {
-            _sessionLogFilePaths[session.Id] = logWriter.FilePath;
-        }
+        LocalAutomation.Runtime.ExecutionSession session = new(logStream, plan, _sessionLogDirectory);
+        ExecutionSessionLogWriter? logWriter = ExecutionSessionLogWriter.TryAttach(session);
 
         // Transfer ownership of the file writer to the background run only after all synchronous startup hooks succeed.
         bool runStarted = false;
@@ -83,7 +77,6 @@ public sealed class ExecutionSessionService
         {
             if (!runStarted)
             {
-                _sessionLogFilePaths.Remove(session.Id);
                 logWriter?.Dispose();
             }
         }
@@ -101,16 +94,7 @@ public sealed class ExecutionSessionService
         }
 
         _sessions.Remove(existingSession);
-        _sessionLogFilePaths.Remove(sessionId);
         SessionsChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// Gets the durable log file path for the provided session when disk logging is available.
-    /// </summary>
-    public string? GetSessionLogFilePath(RuntimeExecutionSessionId sessionId)
-    {
-        return _sessionLogFilePaths.GetValueOrDefault(sessionId);
     }
 
     /// <summary>

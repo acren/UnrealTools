@@ -25,13 +25,14 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     /// <summary>
     /// Creates a file-backed writer and subscribes it to the provided session stream.
     /// </summary>
-    private ExecutionSessionLogWriter(ExecutionSession session, string logDirectory)
+    private ExecutionSessionLogWriter(ExecutionSession session)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        FilePath = session.LogFilePath ?? throw new InvalidOperationException("Session log file path is not configured.");
 
         // Create the session-log directory lazily so hosts that never execute operations never touch the filesystem.
+        string logDirectory = Path.GetDirectoryName(FilePath) ?? throw new InvalidOperationException("Session log file path must include a directory.");
         Directory.CreateDirectory(logDirectory);
-        FilePath = CreateLogFilePath(session, logDirectory);
         _writer = new StreamWriter(new FileStream(FilePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
         {
             AutoFlush = true
@@ -48,26 +49,26 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     /// <summary>
     /// Attempts to attach a file writer to the session, reporting infrastructure failures without blocking execution.
     /// </summary>
-    public static ExecutionSessionLogWriter? TryAttach(ExecutionSession session, string? logDirectory)
+    public static ExecutionSessionLogWriter? TryAttach(ExecutionSession session)
     {
         if (session == null)
         {
             throw new ArgumentNullException(nameof(session));
         }
 
-        if (string.IsNullOrWhiteSpace(logDirectory))
+        if (string.IsNullOrWhiteSpace(session.LogFilePath))
         {
             return null;
         }
 
         try
         {
-            return new ExecutionSessionLogWriter(session, logDirectory);
+            return new ExecutionSessionLogWriter(session);
         }
         catch (Exception ex) when (IsLogFileInfrastructureException(ex))
         {
-            session.Logger.LogError(ex, "Failed to create session log file under '{SessionLogDirectory}'. Session output will remain available in memory only.", logDirectory);
-            TryLogApplicationInfrastructureFailure(ex, "Failed to create session log file under '{SessionLogDirectory}'.", logDirectory);
+            session.Logger.LogError(ex, "Failed to create session log file '{SessionLogFilePath}'. Session output will remain available in memory only.", session.LogFilePath);
+            TryLogApplicationInfrastructureFailure(ex, "Failed to create session log file '{SessionLogFilePath}'.", session.LogFilePath);
             return null;
         }
     }
@@ -129,17 +130,6 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     {
         _session.Logger.LogError(exception, "Session log file '{SessionLogFilePath}' is no longer writable. Session output will remain available in memory only.", FilePath);
         TryLogApplicationInfrastructureFailure(exception, "Session log file '{SessionLogFilePath}' is no longer writable.", FilePath);
-    }
-
-    /// <summary>
-    /// Creates a unique, readable log filename from the session start time, operation name, and stable session id.
-    /// </summary>
-    private static string CreateLogFilePath(ExecutionSession session, string logDirectory)
-    {
-        // Keep the operation segment readable while relying on the session id for uniqueness.
-        string operationSegment = ExecutionPathConventions.MakeCompactSegment(session.OperationName, maxLength: 40);
-        string fileName = $"{session.StartedAt:yyyyMMdd_HHmmssfff}_{operationSegment}_{session.Id.Value}.log";
-        return Path.Combine(logDirectory, fileName);
     }
 
     /// <summary>

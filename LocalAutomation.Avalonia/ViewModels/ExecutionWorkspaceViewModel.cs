@@ -280,8 +280,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             kind: RuntimeWorkspaceTabKind.ExecutionSession,
             presentation: new RuntimeWorkspaceTabPresentation(showGraph: true, showLog: true, showSubtitle: true, showStatusMarker: true, showRuntimeMetrics: true),
             graph: graph,
-            session: session,
-            sessionLogFilePath: _execution.GetSessionLogFilePath(session.Id));
+            session: session);
         /* Runtime child-task insertion can mutate the live session graph between reads, so build the shared task-view
            registry and the rendered graph from the same materialized snapshot each time. */
         List<RuntimeExecutionTask> taskSnapshot = session.Tasks.ToList();

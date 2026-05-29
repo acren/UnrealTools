@@ -40,7 +40,7 @@ public sealed class ExecutionSession
     /// <summary>
     /// Creates an execution session around a shared log stream and the authored plan it will execute.
     /// </summary>
-    public ExecutionSession(ILogStream logStream, ExecutionPlan plan)
+    public ExecutionSession(ILogStream logStream, ExecutionPlan plan, string? logDirectory = null)
     {
         LogStream = logStream ?? throw new ArgumentNullException(nameof(logStream));
         if (plan == null)
@@ -57,6 +57,7 @@ public sealed class ExecutionSession
         try
         {
             InitializeFromPlan(plan);
+            LogFilePath = CreateLogFilePath(logDirectory);
         }
         catch
         {
@@ -81,6 +82,11 @@ public sealed class ExecutionSession
     internal string TempRootPath { get; }
 
     public ILogStream LogStream { get; }
+
+    /// <summary>
+    /// Gets the durable log file path assigned to mirror this session's in-memory log stream when file logging is configured.
+    /// </summary>
+    public string? LogFilePath { get; }
 
     /// <summary>
     /// Gets the live task graph coordinated by this session. Sessions clone plan tasks when they start so runtime
@@ -117,6 +123,22 @@ public sealed class ExecutionSession
     public string OperationName => RootTask.Operation.OperationName;
 
     public string TargetName => GetRootOperationParameters().Target?.DisplayName ?? string.Empty;
+
+    /// <summary>
+    /// Creates the configured durable log file path from this session's stable identity and root operation name.
+    /// </summary>
+    private string? CreateLogFilePath(string? logDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(logDirectory))
+        {
+            return null;
+        }
+
+        // Keep the operation segment readable while relying on the session id for uniqueness.
+        string operationSegment = ExecutionPathConventions.MakeCompactSegment(OperationName, maxLength: 40);
+        string fileName = $"{StartedAt:yyyyMMdd_HHmmssfff}_{operationSegment}_{Id.Value}.log";
+        return Path.Combine(logDirectory, fileName);
+    }
 
     /// <summary>
     /// Gets the session-scoped logger that writes into this session's buffered log streams.

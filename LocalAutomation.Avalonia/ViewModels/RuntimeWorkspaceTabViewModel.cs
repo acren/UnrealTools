@@ -27,7 +27,7 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     /// <summary>
     /// Creates a workspace tab with the provided graph and optional execution session.
     /// </summary>
-    public RuntimeWorkspaceTabViewModel(string id, string title, string subtitle, RuntimeWorkspaceTabKind kind, RuntimeWorkspaceTabPresentation presentation, ExecutionGraphViewModel graph, RuntimeExecutionSession? session = null, string? sessionLogFilePath = null)
+    public RuntimeWorkspaceTabViewModel(string id, string title, string subtitle, RuntimeWorkspaceTabKind kind, RuntimeWorkspaceTabPresentation presentation, ExecutionGraphViewModel graph, RuntimeExecutionSession? session = null)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         Title = title ?? throw new ArgumentNullException(nameof(title));
@@ -36,7 +36,6 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
         Presentation = presentation ?? throw new ArgumentNullException(nameof(presentation));
         Graph = graph ?? throw new ArgumentNullException(nameof(graph));
         Session = session;
-        SessionLogFilePath = sessionLogFilePath;
 
         /* Every graph-rendering tab now shares task VMs through its tab-owned registry. Attach the dictionary once here
            so both execution-session tabs and the always-present plan-preview tab can materialize graph nodes safely. */
@@ -81,7 +80,7 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     /// <summary>
     /// Gets the durable log file path for execution-session tabs when disk logging is available.
     /// </summary>
-    public string? SessionLogFilePath { get; }
+    public string? SessionLogFilePath => Session?.LogFilePath;
 
     /// <summary>
     /// Gets the shared task view models for this tab, keyed by execution task id.
