@@ -4,7 +4,9 @@ using Avalonia.Threading;
 using LocalAutomation.Application;
 using LocalAutomation.Avalonia.ViewModels;
 using LocalAutomation.Core;
+using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 using TestUtilities;
 using RuntimeExecutionTask = LocalAutomation.Runtime.ExecutionTask;
 using RuntimeExecutionTaskId = LocalAutomation.Runtime.ExecutionTaskId;
@@ -29,10 +31,14 @@ public sealed class ExecutionWorkspaceViewModelTests
            test-host logging setup as the existing runtime and application suites. */
         _ = TestLoggingBootstrap.LoggerFactory;
 
-        /* Build one real workspace plus one attached execution session so the test exercises the same graph selection,
-           selected-log rebuild, and metrics refresh wiring used by the shell. */
-        LocalAutomationApplicationHost services = LocalAutomationApplicationHost.Create();
-        ExecutionWorkspaceViewModel workspace = new(services, _ => { });
+        /* Build one real workspace through the validated DI registrations so the test exercises the same service ownership
+           and constructor dependency shape used by the shell. */
+        using ServiceProvider services = new ServiceCollection()
+            .AddLocalAutomationApplication(new ExtensionCatalog())
+            .AddSingleton<Action<string>>(_ => _ => { })
+            .AddTransient<ExecutionWorkspaceViewModel>()
+            .BuildLocalAutomationServiceProvider();
+        ExecutionWorkspaceViewModel workspace = services.GetRequiredService<ExecutionWorkspaceViewModel>();
 
         /* Keep the authored plan minimal while still giving the workspace one selected container and several descendants
            that can participate in one coalesced task-state batch. */

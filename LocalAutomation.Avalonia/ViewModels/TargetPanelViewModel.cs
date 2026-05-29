@@ -1,10 +1,10 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using LocalAutomation.Application;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
-using LocalAutomationApplicationHost = LocalAutomation.Application.LocalAutomationApplicationHost;
 
 namespace LocalAutomation.Avalonia.ViewModels;
 
@@ -13,7 +13,8 @@ namespace LocalAutomation.Avalonia.ViewModels;
 /// </summary>
 public sealed class TargetPanelViewModel : ViewModelBase
 {
-    private readonly LocalAutomationApplicationHost _services;
+    private readonly TargetDiscoveryService _targets;
+    private readonly ContextActionService _contextActions;
     private readonly Action<TargetListItemViewModel?, TargetListItemViewModel?> _handleSelectedTargetChanged;
     private readonly Action _handleTargetsChanged;
     private readonly Action<string> _setStatus;
@@ -23,15 +24,17 @@ public sealed class TargetPanelViewModel : ViewModelBase
     private TargetListItemViewModel? _selectedTarget;
 
     /// <summary>
-    /// Creates the target panel view model around the shared target services and shell callbacks.
+    /// Creates the target panel view model around target services and shell callbacks.
     /// </summary>
     public TargetPanelViewModel(
-        LocalAutomationApplicationHost services,
+        TargetDiscoveryService targets,
+        ContextActionService contextActions,
         Action<string> setStatus,
         Action<TargetListItemViewModel?, TargetListItemViewModel?> handleSelectedTargetChanged,
         Action handleTargetsChanged)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _targets = targets ?? throw new ArgumentNullException(nameof(targets));
+        _contextActions = contextActions ?? throw new ArgumentNullException(nameof(contextActions));
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
         _handleSelectedTargetChanged = handleSelectedTargetChanged ?? throw new ArgumentNullException(nameof(handleSelectedTargetChanged));
         _handleTargetsChanged = handleTargetsChanged ?? throw new ArgumentNullException(nameof(handleTargetsChanged));
@@ -128,16 +131,16 @@ public sealed class TargetPanelViewModel : ViewModelBase
 
         try
         {
-            IOperationTarget createdTarget = _services.Targets.CreateTarget(source);
-            if (!_services.Targets.IsTarget(createdTarget))
+            IOperationTarget createdTarget = _targets.CreateTarget(source);
+            if (!_targets.IsTarget(createdTarget))
             {
                 errorMessage = $"Created target '{createdTarget.GetType().Name}' is not recognized by the registered target catalog.";
                 return false;
             }
 
             TargetListItemViewModel? existingTarget = Targets.FirstOrDefault(item =>
-                string.Equals(item.TargetPath, _services.Targets.GetTargetPath(createdTarget), StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(item.TypeName, _services.Targets.GetTypeName(createdTarget), StringComparison.Ordinal));
+                string.Equals(item.TargetPath, _targets.GetTargetPath(createdTarget), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.TypeName, _targets.GetTypeName(createdTarget), StringComparison.Ordinal));
 
             if (existingTarget != null)
             {
@@ -147,11 +150,11 @@ public sealed class TargetPanelViewModel : ViewModelBase
                 return true;
             }
 
-            TargetListItemViewModel targetItem = new(_services, createdTarget);
+            TargetListItemViewModel targetItem = new(_targets, createdTarget);
             AddTargetItem(targetItem);
             SelectedTarget = targetItem;
             NewTargetPath = string.Empty;
-            _setStatus($"Added {_services.Targets.GetTypeName(createdTarget).ToLowerInvariant()} target '{_services.Targets.GetDisplayName(createdTarget)}'.");
+            _setStatus($"Added {_targets.GetTypeName(createdTarget).ToLowerInvariant()} target '{_targets.GetDisplayName(createdTarget)}'.");
             _handleTargetsChanged();
             return true;
         }
@@ -253,7 +256,7 @@ public sealed class TargetPanelViewModel : ViewModelBase
             return;
         }
 
-        foreach (ContextActionDescriptor descriptor in _services.ContextActions.GetActionsForTarget(SelectedTarget.Target))
+        foreach (ContextActionDescriptor descriptor in _contextActions.GetActionsForTarget(SelectedTarget.Target))
         {
             object target = SelectedTarget.Target;
             TargetActions.Add(new TargetContextActionViewModel(descriptor, () => ExecuteTargetAction(descriptor, target)));

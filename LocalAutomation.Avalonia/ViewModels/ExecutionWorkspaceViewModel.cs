@@ -5,10 +5,10 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using LocalAutomation.Application;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
-using LocalAutomationApplicationHost = LocalAutomation.Application.LocalAutomationApplicationHost;
 using RuntimeExecutionPlan = LocalAutomation.Runtime.ExecutionPlan;
 using RuntimeExecutionSession = LocalAutomation.Runtime.ExecutionSession;
 using RuntimeExecutionSessionId = LocalAutomation.Runtime.ExecutionSessionId;
@@ -31,7 +31,8 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private const int MaxLogEntriesPerFlush = 100;
     private static readonly TimeSpan PendingLogFlushInterval = TimeSpan.FromMilliseconds(50);
 
-    private readonly LocalAutomationApplicationHost _services;
+    private readonly ApplicationSettingsService _applicationSettingsService;
+    private readonly ExecutionSessionService _execution;
     private readonly object _pendingLogSyncRoot = new();
     private readonly object _pendingTaskStateSyncRoot = new();
     private readonly object _pendingGraphRefreshSyncRoot = new();
@@ -50,17 +51,18 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private RuntimeWorkspaceTabViewModel? _selectedRuntimeTab;
 
     /// <summary>
-    /// Creates the execution workspace view model around the shared services and shell status sink.
+    /// Creates the execution workspace view model around execution services and the shell status sink.
     /// </summary>
-    public ExecutionWorkspaceViewModel(LocalAutomationApplicationHost services, Action<string> setStatus)
+    public ExecutionWorkspaceViewModel(ApplicationSettingsService applicationSettingsService, ExecutionSessionService execution, Action<string> setStatus)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _applicationSettingsService = applicationSettingsService ?? throw new ArgumentNullException(nameof(applicationSettingsService));
+        _execution = execution ?? throw new ArgumentNullException(nameof(execution));
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
         _pendingLogFlushTimer = new DispatcherTimer { Interval = PendingLogFlushInterval };
         _pendingLogFlushTimer.Tick += HandlePendingLogFlushTimerTick;
         _runtimeDurationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _runtimeDurationTimer.Tick += HandleRuntimeDurationTimerTick;
-        _services.ApplicationSettingsService.Settings.PropertyChanged += HandleApplicationSettingsChanged;
+        _applicationSettingsService.Settings.PropertyChanged += HandleApplicationSettingsChanged;
 
         RuntimeTabs.Add(CreateApplicationLogTab());
         RuntimeTabs.Add(CreatePlanPreviewTab());
@@ -607,7 +609,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
 
         if (runtimeTab.Session != null)
         {
-            _services.Execution.RemoveSession(runtimeTab.Session.Id);
+            _execution.RemoveSession(runtimeTab.Session.Id);
         }
 
         if (ReferenceEquals(SelectedRuntimeTab, runtimeTab))
@@ -1239,7 +1241,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private ExecutionGraphViewModel CreateExecutionGraphViewModel()
     {
         ExecutionGraphViewModel graph = new();
-        graph.SetRevealHiddenTasks(_services.ApplicationSettingsService.Settings.RevealHiddenTasks);
+        graph.SetRevealHiddenTasks(_applicationSettingsService.Settings.RevealHiddenTasks);
         return graph;
     }
 
@@ -1254,7 +1256,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             return;
         }
 
-        bool revealHiddenTasks = _services.ApplicationSettingsService.Settings.RevealHiddenTasks;
+        bool revealHiddenTasks = _applicationSettingsService.Settings.RevealHiddenTasks;
         foreach (RuntimeWorkspaceTabViewModel tab in RuntimeTabs)
         {
             tab.Graph.SetRevealHiddenTasks(revealHiddenTasks);

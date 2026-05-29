@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using LocalAutomation.Application;
+using LocalAutomation.Avalonia.Bootstrap;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Persistence;
 using LocalAutomation.Runtime;
@@ -17,22 +18,34 @@ namespace LocalAutomation.Avalonia;
 /// </summary>
 public sealed class SessionPersistenceService
 {
-    private readonly LocalAutomationApplicationHost _services;
+    private readonly ExtensionCatalog _catalog;
+    private readonly TargetDiscoveryService _targets;
+    private readonly OperationCatalogService _operations;
+    private readonly OperationSessionService _operationSession;
     private readonly string _dataFilePath;
 
     /// <summary>
-    /// Creates a session persistence service around the shared application host.
+    /// Creates a session persistence service around the shell identity and exact application services it needs.
     /// </summary>
-    public SessionPersistenceService(LocalAutomationApplicationHost services)
+    public SessionPersistenceService(
+        ShellIdentity shellIdentity,
+        ExtensionCatalog catalog,
+        TargetDiscoveryService targets,
+        OperationCatalogService operations,
+        OperationSessionService operationSession)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
+        shellIdentity = shellIdentity ?? throw new ArgumentNullException(nameof(shellIdentity));
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        _targets = targets ?? throw new ArgumentNullException(nameof(targets));
+        _operations = operations ?? throw new ArgumentNullException(nameof(operations));
+        _operationSession = operationSession ?? throw new ArgumentNullException(nameof(operationSession));
 
         // Keep each launcher's persisted shell state inside its own LocalAppData root so host-specific shells do not overwrite
         // one another's target lists, selected operations, or option values.
         string dataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            App.ShellIdentity.DataFolderName);
-        _dataFilePath = Path.Combine(dataFolder, App.ShellIdentity.SessionFileName);
+            shellIdentity.DataFolderName);
+        _dataFilePath = Path.Combine(dataFolder, shellIdentity.SessionFileName);
     }
 
     /// <summary>
@@ -109,8 +122,8 @@ public sealed class SessionPersistenceService
     /// </summary>
     public TargetSessionSnapshot CreateTargetSnapshot(IOperationTarget target)
     {
-        TargetTypeId targetTypeId = _services.Targets.GetTargetTypeId(target) ?? throw new InvalidOperationException($"No target descriptor matched '{target.GetType().Name}'.");
-        string targetPath = _services.Targets.GetTargetPath(target);
+        TargetTypeId targetTypeId = _targets.GetTargetTypeId(target) ?? throw new InvalidOperationException($"No target descriptor matched '{target.GetType().Name}'.");
+        string targetPath = _targets.GetTargetPath(target);
         return new TargetSessionSnapshot
         {
             Key = TargetKeyUtility.BuildTargetKey(targetTypeId, targetPath).Value,
@@ -125,17 +138,17 @@ public sealed class SessionPersistenceService
     public bool TryRestoreTarget(TargetSessionSnapshot snapshot, out IOperationTarget? target)
     {
         target = null;
-        if (!_services.Targets.TryCreateTarget(snapshot.Path, out IOperationTarget? createdTarget) || createdTarget == null)
+        if (!_targets.TryCreateTarget(snapshot.Path, out IOperationTarget? createdTarget) || createdTarget == null)
         {
             return false;
         }
 
-        if (!_services.Targets.IsTarget(createdTarget) || !_services.Targets.IsValidTarget(createdTarget))
+        if (!_targets.IsTarget(createdTarget) || !_targets.IsValidTarget(createdTarget))
         {
             return false;
         }
 
-        TargetTypeId? restoredTypeId = _services.Targets.GetTargetTypeId(createdTarget);
+        TargetTypeId? restoredTypeId = _targets.GetTargetTypeId(createdTarget);
         if (restoredTypeId == null || restoredTypeId.Value != snapshot.TypedTargetTypeId)
         {
             return false;
@@ -157,13 +170,13 @@ public sealed class SessionPersistenceService
 
         foreach (IOperationTarget target in legacyState.Targets.OfType<IOperationTarget>())
         {
-            TargetTypeId? targetTypeId = _services.Targets.GetTargetTypeId(target);
-            if (targetTypeId == null || !_services.Targets.IsValidTarget(target))
+            TargetTypeId? targetTypeId = _targets.GetTargetTypeId(target);
+            if (targetTypeId == null || !_targets.IsValidTarget(target))
             {
                 continue;
             }
 
-            string targetPath = _services.Targets.GetTargetPath(target);
+            string targetPath = _targets.GetTargetPath(target);
             snapshot.Targets.Add(new TargetSessionSnapshot
             {
                 Key = TargetKeyUtility.BuildTargetKey(targetTypeId.Value, targetPath).Value,
@@ -185,18 +198,18 @@ public sealed class SessionPersistenceService
         Dictionary<TargetTypeId, OperationId?> typedSelections = snapshot.TypedSelectedOperationIdsByTargetType;
         typedSelections[selectedTarget.TypedTargetTypeId] = legacyState.OperationType == null
             ? null
-            : _services.Operations.GetOperation(legacyState.OperationType)?.Id;
+            : _operations.GetOperation(legacyState.OperationType)?.Id;
         snapshot.TypedSelectedOperationIdsByTargetType = typedSelections;
 
         // Migrate legacy option values into the new layered setting files for the selected target so existing user
         // edits are preserved when upgrading from the old session-owned persistence model.
         IOperationTarget? selectedRuntimeTarget = legacyState.Targets.OfType<IOperationTarget>().FirstOrDefault(item =>
-            string.Equals(_services.Targets.GetTargetPath(item), selectedTarget.Path, StringComparison.OrdinalIgnoreCase) &&
-            _services.Targets.GetTargetTypeId(item) == selectedTarget.TypedTargetTypeId);
+            string.Equals(_targets.GetTargetPath(item), selectedTarget.Path, StringComparison.OrdinalIgnoreCase) &&
+            _targets.GetTargetTypeId(item) == selectedTarget.TypedTargetTypeId);
         selectedRuntimeTarget ??= legacyState.Targets.OfType<IOperationTarget>().FirstOrDefault();
         if (selectedRuntimeTarget != null)
         {
-            _services.OperationSession.SaveOptionValues(legacyState.OptionsInstances.Cast<object>(), selectedRuntimeTarget);
+            _operationSession.SaveOptionValues(legacyState.OptionsInstances.Cast<object>(), selectedRuntimeTarget);
         }
 
         snapshot.SelectedTargetKey = selectedTarget.Key;
@@ -213,7 +226,7 @@ public sealed class SessionPersistenceService
             return null;
         }
 
-        return _services.Catalog.TargetDescriptors.FirstOrDefault(descriptor => string.Equals(descriptor.TargetType.FullName, legacyTypeName, StringComparison.Ordinal))?.Id;
+        return _catalog.TargetDescriptors.FirstOrDefault(descriptor => string.Equals(descriptor.TargetType.FullName, legacyTypeName, StringComparison.Ordinal))?.Id;
     }
 
     /// <summary>

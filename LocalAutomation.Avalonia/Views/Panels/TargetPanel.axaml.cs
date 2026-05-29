@@ -109,7 +109,7 @@ public partial class TargetPanel : UserControl
             return;
         }
 
-        SettingsWindow settingsWindow = new(App.Services);
+        SettingsWindow settingsWindow = App.CreateSettingsWindow();
         await settingsWindow.ShowDialog(owner);
     }
 }

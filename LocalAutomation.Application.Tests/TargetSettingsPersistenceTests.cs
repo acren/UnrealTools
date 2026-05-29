@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -22,6 +23,8 @@ public sealed class TargetSettingsPersistenceTests
         string tempRoot = Path.Combine(testRoot, "temp");
         string targetSettingsFileName = "target-settings.json";
         string persistedValue = "from-target-local";
+        string originalOutputRoot = OutputPaths.Root();
+        string originalTempRoot = OutputPaths.TempRoot();
 
         try
         {
@@ -31,27 +34,34 @@ public sealed class TargetSettingsPersistenceTests
                 Path.Combine(targetDirectory, targetSettingsFileName),
                 CreatePersistedSettingsJson("test.value", persistedValue));
 
-            // Register the fake target through the same catalog path used by application hosts.
+            // Register the fake target through the same catalog path used by DI-backed application startup.
             ExtensionCatalog catalog = new();
             catalog.RegisterTarget(new TargetDescriptor(new TargetTypeId("test-target"), "Test Target", typeof(DirectoryBackedTestTarget)));
-            LocalAutomationApplicationHost host = new(
-                catalog,
-                appDataRootPath: appDataRoot,
-                targetSettingsFileName: targetSettingsFileName,
-                defaultOutputRootPath: outputRoot,
-                defaultTempRootPath: tempRoot);
+            using ServiceProvider services = new ServiceCollection()
+                .AddLocalAutomationApplication(
+                    catalog,
+                    new LocalAutomationHostOptions(
+                        appDataRoot,
+                        targetSettingsFileName,
+                        defaultOutputRootPath: outputRoot,
+                        defaultTempRootPath: tempRoot))
+                .BuildLocalAutomationServiceProvider();
 
             // Apply target settings through the public target persistence flow rather than inspecting layer internals.
             DirectoryBackedTestTarget target = new(targetDirectory);
             TargetSettingsOwner settingsOwner = new();
 
-            host.TargetSettingsService.Apply(settingsOwner, target);
+            services.GetRequiredService<TargetSettingsService>().Apply(settingsOwner, target);
 
             // The persisted value should replace the owner default when the target-local file is in the target directory.
             Assert.Equal(persistedValue, settingsOwner.Value);
         }
         finally
         {
+            // Restore process-wide output paths because application settings apply host defaults during service resolution.
+            OutputPaths.SetRoot(originalOutputRoot);
+            OutputPaths.SetTempRoot(originalTempRoot);
+
             // Clean the isolated filesystem state even when the red assertion fails.
             if (Directory.Exists(testRoot))
             {

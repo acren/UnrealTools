@@ -8,7 +8,6 @@ using LocalAutomation.Application;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
-using LocalAutomationApplicationHost = LocalAutomation.Application.LocalAutomationApplicationHost;
 using RuntimeExecutionPlan = LocalAutomation.Runtime.ExecutionPlan;
 using RuntimeExecutionSession = LocalAutomation.Runtime.ExecutionSession;
 
@@ -32,7 +31,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
     private static readonly TimeSpan SessionSaveDebounceDelay = TimeSpan.FromMilliseconds(350);
 
-    private readonly LocalAutomationApplicationHost _services;
+    private readonly OperationSessionService _operationSession;
+    private readonly TargetDiscoveryService _targets;
+    private readonly OperationCatalogService _operations;
+    private readonly ExecutionSessionService _execution;
+    private readonly OptionEditorService _optionEditors;
     private readonly OperationParameterSession _parameterSession;
     private readonly SessionPersistenceService _sessionPersistence;
     private readonly DebouncedBackgroundSaver<SessionSnapshot> _sessionSnapshotSaver;
@@ -49,25 +52,41 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Creates the Avalonia main-window view model around the shared LocalAutomation application host.
+    /// Creates the Avalonia main-window view model around the exact application services used by the shell.
     /// </summary>
-    public MainWindowViewModel(LocalAutomationApplicationHost services)
+    public MainWindowViewModel(
+        OperationSessionService operationSession,
+        PersistedSettingsBatchSaver settingsBatchSaver,
+        TargetDiscoveryService targets,
+        OperationCatalogService operations,
+        ExecutionSessionService execution,
+        OptionEditorService optionEditors,
+        ContextActionService contextActions,
+        ApplicationSettingsService applicationSettingsService,
+        SessionPersistenceService sessionPersistence)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
-        _parameterSession = _services.OperationSession.CreateParameterSession();
-        _sessionPersistence = new SessionPersistenceService(services);
+        _operationSession = operationSession ?? throw new ArgumentNullException(nameof(operationSession));
+        settingsBatchSaver = settingsBatchSaver ?? throw new ArgumentNullException(nameof(settingsBatchSaver));
+        _targets = targets ?? throw new ArgumentNullException(nameof(targets));
+        _operations = operations ?? throw new ArgumentNullException(nameof(operations));
+        _execution = execution ?? throw new ArgumentNullException(nameof(execution));
+        _optionEditors = optionEditors ?? throw new ArgumentNullException(nameof(optionEditors));
+        contextActions = contextActions ?? throw new ArgumentNullException(nameof(contextActions));
+        applicationSettingsService = applicationSettingsService ?? throw new ArgumentNullException(nameof(applicationSettingsService));
+        _sessionPersistence = sessionPersistence ?? throw new ArgumentNullException(nameof(sessionPersistence));
+        _parameterSession = _operationSession.CreateParameterSession();
         _sessionSnapshotSaver = new DebouncedBackgroundSaver<SessionSnapshot>(
             debounceDelay: SessionSaveDebounceDelay,
             saveState: _sessionPersistence.Save,
             handleSaveException: HandleSessionSaveException);
         _targetOptionValuesSaver = new DebouncedBackgroundSaver<PersistedSettingsWriteBatch>(
             debounceDelay: SessionSaveDebounceDelay,
-            saveState: _services.SettingsBatchSaver.Save,
+            saveState: settingsBatchSaver.Save,
             mergeStates: static (earlier, later) => earlier.Merge(later),
             handleSaveException: HandleTargetSettingsSaveException);
         _parameterSession.PropertyChanged += HandleOperationParametersChanged;
-        Target = new TargetPanelViewModel(services, SetStatus, HandleSelectedTargetChanged, SaveSessionState);
-        ExecutionWorkspace = new ExecutionWorkspaceViewModel(services, SetStatus);
+        Target = new TargetPanelViewModel(targets, contextActions, SetStatus, HandleSelectedTargetChanged, SaveSessionState);
+        ExecutionWorkspace = new ExecutionWorkspaceViewModel(applicationSettingsService, execution, SetStatus);
         RestoreSessionState();
     }
 
@@ -226,12 +245,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Gets whether the current selection can produce a command preview string for copying.
     /// </summary>
-    public bool CanCopyCommand => !string.IsNullOrWhiteSpace(_services.OperationSession.GetPrimaryCommandText(_currentOperation, _parameterSession.RawValue));
+    public bool CanCopyCommand => !string.IsNullOrWhiteSpace(_operationSession.GetPrimaryCommandText(_currentOperation, _parameterSession.RawValue));
 
     /// <summary>
     /// Gets whether the selected operation currently passes its execution requirements.
     /// </summary>
-    public bool CanExecute => _services.OperationSession.CanExecute(_currentOperation, _parameterSession.RawValue);
+    public bool CanExecute => _operationSession.CanExecute(_currentOperation, _parameterSession.RawValue);
 
     /// <summary>
     /// Gets whether the execute warning panel should be shown.
@@ -241,12 +260,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Gets the current execution blocking reason shown in the warning panel.
     /// </summary>
-    public string ExecuteDisabledReason => _services.OperationSession.GetExecuteDisabledReason(_currentOperation, _parameterSession.RawValue) ?? string.Empty;
+    public string ExecuteDisabledReason => _operationSession.GetExecuteDisabledReason(_currentOperation, _parameterSession.RawValue) ?? string.Empty;
 
     /// <summary>
     /// Gets the current command preview text.
     /// </summary>
-    public string VisibleCommand => _services.OperationSession.GetVisibleCommandText(_currentOperation, _parameterSession.RawValue);
+    public string VisibleCommand => _operationSession.GetVisibleCommandText(_currentOperation, _parameterSession.RawValue);
 
     /// <summary>
     /// Gets the current operation button label.
@@ -256,12 +275,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Gets the first command preview line for clipboard copy actions.
     /// </summary>
-    public string? PrimaryCommandText => _services.OperationSession.GetPrimaryCommandText(_currentOperation, _parameterSession.RawValue);
+    public string? PrimaryCommandText => _operationSession.GetPrimaryCommandText(_currentOperation, _parameterSession.RawValue);
 
     /// <summary>
     /// Gets the current previewable execution plan for the selected target, operation, and options.
     /// </summary>
-    public RuntimeExecutionPlan? VisibleExecutionPlan => _services.OperationSession.GetExecutionPlan(_currentOperation, _parameterSession.RawValue);
+    public RuntimeExecutionPlan? VisibleExecutionPlan => _operationSession.GetExecutionPlan(_currentOperation, _parameterSession.RawValue);
 
     /// <summary>
     /// Flushes any queued session and target-setting saves immediately so the most recent UI edits are persisted before
@@ -325,7 +344,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         // Attach the execution workspace and shared session registry before the runner starts so early task-state
         // transitions, especially the initial Running state, are not missed by the UI.
-        RuntimeExecutionSession session = _services.Execution.StartExecution(_currentOperation, _parameterSession.RawValue, session =>
+        RuntimeExecutionSession session = _execution.StartExecution(_currentOperation, _parameterSession.RawValue, session =>
         {
             ExecutionWorkspace.AttachExecutionSession(session);
         });
@@ -445,7 +464,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             return new PersistedSettingsWriteBatch();
         }
 
-        return _services.OperationSession.CaptureOptionValues(_parameterSession.OptionSets, target);
+        return _operationSession.CaptureOptionValues(_parameterSession.OptionSets, target);
     }
 
     /// <summary>
@@ -477,7 +496,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        TargetTypeId? targetTypeId = _services.Targets.GetTargetTypeId(target);
+        TargetTypeId? targetTypeId = _targets.GetTargetTypeId(target);
         if (targetTypeId == null)
         {
             return;
@@ -525,7 +544,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             {
                 if (_sessionPersistence.TryRestoreTarget(targetSnapshot, out IOperationTarget? target) && target != null)
                 {
-                    Target.AddTargetItem(new TargetListItemViewModel(_services, target));
+                    Target.AddTargetItem(new TargetListItemViewModel(_targets, target));
                     restoredSnapshots.Add(targetSnapshot);
                 }
             }
@@ -586,8 +605,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         _sessionSnapshot.Targets = Target.Targets.Select(item =>
         {
             TargetSessionSnapshot snapshot = _sessionPersistence.CreateTargetSnapshot(item.Target);
-            snapshot.TypedTargetTypeId = _services.Targets.GetTargetTypeId(item.Target) ?? snapshot.TypedTargetTypeId;
-            snapshot.Path = _services.Targets.GetTargetPath(item.Target);
+            snapshot.TypedTargetTypeId = _targets.GetTargetTypeId(item.Target) ?? snapshot.TypedTargetTypeId;
+            snapshot.Path = _targets.GetTargetPath(item.Target);
             snapshot.TypedKey = TargetKeyUtility.BuildTargetKey(snapshot.TypedTargetTypeId, snapshot.Path);
             return snapshot;
         }).ToList();
@@ -611,9 +630,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private void RefreshOperationSelection(OperationId? currentSelectionCandidate = null)
     {
         OperationId? previousSelectedOperationId = currentSelectionCandidate ?? _selectedOperationId;
-        IReadOnlyList<OperationDescriptor> compatibleOperations = _services.Operations.GetAvailableOperations(SelectedTarget?.Target);
+        IReadOnlyList<OperationDescriptor> compatibleOperations = _operations.GetAvailableOperations(SelectedTarget?.Target);
 
-        OperationId? retainedOperationId = _services.OperationSession.ResolveSelectedOperationId(
+        OperationId? retainedOperationId = _operationSession.ResolveSelectedOperationId(
             compatibleOperations,
             previousSelectedOperationId,
             GetRememberedOperationIdForSelectedTargetType());
@@ -644,7 +663,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         try
         {
-            _currentOperation = selectedOperation != null ? _services.OperationSession.CreateOperation(selectedOperation.OperationType) : null;
+            _currentOperation = selectedOperation != null ? _operationSession.CreateOperation(selectedOperation.OperationType) : null;
             OperationParameters replacementParameters = _currentOperation?.CreateParameters(previousParameters) ?? new OperationParameters();
             _parameterSession.Replace(replacementParameters, SelectedTarget?.Target as IOperationTarget);
             activity.SetTag("new_option_set.count", replacementParameters.OptionsInstances.Count);
@@ -686,8 +705,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private void ApplySelectedTargetChange(TargetListItemViewModel? previousTarget, TargetListItemViewModel? selectedTarget)
     {
         IOperationTarget? previousOperationTarget = previousTarget?.Target;
-        TargetTypeId? previousTargetTypeId = previousOperationTarget == null ? null : _services.Targets.GetTargetTypeId(previousOperationTarget);
-        TargetTypeId? selectedTargetTypeId = selectedTarget?.Target == null ? null : _services.Targets.GetTargetTypeId(selectedTarget.Target);
+        TargetTypeId? previousTargetTypeId = previousOperationTarget == null ? null : _targets.GetTargetTypeId(previousOperationTarget);
+        TargetTypeId? selectedTargetTypeId = selectedTarget?.Target == null ? null : _targets.GetTargetTypeId(selectedTarget.Target);
         if (!IsSelectionTransitionActive(SelectionTransitionState.HydratingSessionSelection | SelectionTransitionState.RestoringSession | SelectionTransitionState.ApplyingTargetState) && previousOperationTarget != null)
         {
             QueueTargetOptionValuePersistence(previousOperationTarget);
@@ -793,7 +812,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     /// </summary>
     private TargetTypeId? GetSelectedTargetTypeId()
     {
-        return SelectedTarget?.Target == null ? null : _services.Targets.GetTargetTypeId(SelectedTarget.Target);
+        return SelectedTarget?.Target == null ? null : _targets.GetTargetTypeId(SelectedTarget.Target);
     }
 
     /// <summary>
@@ -861,7 +880,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private void RefreshEnabledOptionSets()
     {
         using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("RefreshEnabledOptionSets");
-        var enabledOptionTypes = _services.OperationSession.GetEnabledOptionSetTypes(_currentOperation, SelectedTarget?.Target as IOperationTarget).ToList();
+        var enabledOptionTypes = _operationSession.GetEnabledOptionSetTypes(_currentOperation, SelectedTarget?.Target as IOperationTarget).ToList();
         List<OperationOptions> existingOptionSets = _parameterSession.OptionSets.ToList();
         int addedOptionSetCount = 0;
         int removedOptionSetCount = 0;
@@ -909,7 +928,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         foreach (OperationOptions options in _parameterSession.OptionSets)
         {
-            EnabledOptionSets.Add(new OptionSetViewModel(_services, options, _services.OptionEditors.GetEditorTarget(options)));
+            EnabledOptionSets.Add(new OptionSetViewModel(options, _optionEditors.GetEditorTarget(options)));
         }
 
         activity.SetTag("option_card.count", EnabledOptionSets.Count);
@@ -928,7 +947,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ApplyPersistedSettings");
 
-        TargetTypeId? targetTypeId = _services.Targets.GetTargetTypeId(SelectedTarget.Target);
+        TargetTypeId? targetTypeId = _targets.GetTargetTypeId(SelectedTarget.Target);
         if (targetTypeId == null)
         {
             return;
@@ -936,7 +955,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         activity.SetTag("target.type", targetTypeId.Value.Value)
             .SetTag("count", _parameterSession.OptionSets.Count);
-        _services.OperationSession.ApplyOptionValues(_parameterSession.OptionSets, SelectedTarget.Target);
+        _operationSession.ApplyOptionValues(_parameterSession.OptionSets, SelectedTarget.Target);
 
         // Recreate property-grid card targets after applying restored values so adapter-backed editors reflect the
         // rehydrated state instead of the pre-apply values captured when the cards were first created.

@@ -2,15 +2,17 @@ using System;
 using System.IO;
 using Avalonia;
 using LocalAutomation.Application;
+using LocalAutomation.Avalonia.ViewModels;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
+using LocalAutomation.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace LocalAutomation.Avalonia.Bootstrap;
 
 /// <summary>
-/// Starts the shared shell around a launcher-provided application host so composition stays outside the UI
-/// assembly.
+/// Starts the shared shell around launcher-provided identity, extension discovery, and dependency injection composition.
 /// </summary>
 public static class ShellAppBootstrapper
 {
@@ -33,7 +35,8 @@ public static class ShellAppBootstrapper
         try
         {
             ExtensionLoadResult extensionLoadResult = BundledExtensionLoader.LoadBundledExtensions();
-            LocalAutomationApplicationHost services = CreateApplicationHost(extensionLoadResult);
+            ServiceProvider services = CreateServiceProvider(extensionLoadResult, shellIdentity);
+            RunStartupActions(services);
             App.ConfigureServices(services);
             LogExtensionDiscovery(extensionLoadResult);
             BuildApp().StartWithClassicDesktopLifetime(args);
@@ -64,9 +67,9 @@ public static class ShellAppBootstrapper
     }
 
     /// <summary>
-    /// Creates an application host from all successfully discovered modules.
+    /// Creates the validated application service provider from all successfully discovered modules.
     /// </summary>
-    private static LocalAutomationApplicationHost CreateApplicationHost(ExtensionLoadResult extensionLoadResult)
+    private static ServiceProvider CreateServiceProvider(ExtensionLoadResult extensionLoadResult, ShellIdentity shellIdentity)
     {
         ExtensionCatalog catalog = new();
         foreach (IExtensionModule module in extensionLoadResult.Modules)
@@ -81,16 +84,62 @@ public static class ShellAppBootstrapper
             }
         }
 
+        // Build host storage options from the concrete launcher identity before any setting service is resolved.
         string appDataRootPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            App.ShellIdentity.DataFolderName);
-        return new LocalAutomationApplicationHost(
-            catalog,
+            shellIdentity.DataFolderName);
+        LocalAutomationHostOptions hostOptions = new(
             appDataRootPath,
-            App.ShellIdentity.TargetSettingsFileName,
-            App.ShellIdentity.DataFolderName,
-            App.ShellIdentity.DefaultOutputRootPath,
-            App.ShellIdentity.DefaultTempRootPath);
+            shellIdentity.TargetSettingsFileName,
+            shellIdentity.DataFolderName,
+            shellIdentity.DefaultOutputRootPath,
+            shellIdentity.DefaultTempRootPath);
+
+        // Register Avalonia-owned windows and shell view models in the same root provider as the application services.
+        return new ServiceCollection()
+            .AddLocalAutomationApplication(catalog, hostOptions)
+            .AddSingleton(shellIdentity)
+            .AddSingleton<SessionPersistenceService>()
+            .AddSingleton<MainWindowViewModel>()
+            .AddTransient<MainWindow>()
+            .AddTransient<SettingsWindowViewModel>()
+            .AddTransient<SettingsWindow>()
+            .BuildLocalAutomationServiceProvider();
+    }
+
+    /// <summary>
+    /// Runs required startup actions after persisted application settings have been applied by their owning service.
+    /// </summary>
+    private static void RunStartupActions(ServiceProvider services)
+    {
+        services.ValidateLocalAutomationPersistedSettingKeys();
+
+        // ApplicationSettingsService construction applies persisted output-path settings before this temp cleanup runs.
+        CleanupStaleSessionTempRoots();
+    }
+
+    /// <summary>
+    /// Deletes stale per-session temp roots left behind by prior crashes or abrupt exits.
+    /// </summary>
+    private static void CleanupStaleSessionTempRoots()
+    {
+        string sessionsRootPath = OutputPaths.GetSessionTempRootParent();
+        if (!Directory.Exists(sessionsRootPath))
+        {
+            return;
+        }
+
+        foreach (string sessionPath in Directory.GetDirectories(sessionsRootPath))
+        {
+            try
+            {
+                Directory.Delete(sessionPath, recursive: true);
+            }
+            catch
+            {
+                // Stale cleanup is best effort because active antivirus or file handles can temporarily lock a session directory.
+            }
+        }
     }
 
     /// <summary>

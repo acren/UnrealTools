@@ -2,7 +2,6 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using LocalAutomation.Avalonia.ViewModels;
-using LocalAutomationApplicationHost = LocalAutomation.Application.LocalAutomationApplicationHost;
 
 namespace LocalAutomation.Avalonia;
 
@@ -12,21 +11,21 @@ namespace LocalAutomation.Avalonia;
 public partial class SettingsWindow : Window
 {
     /// <summary>
-    /// Creates the settings window around the shared application host.
+    /// Creates the settings window around its composed view model.
     /// </summary>
-    public SettingsWindow(LocalAutomationApplicationHost services)
+    public SettingsWindow(SettingsWindowViewModel viewModel)
     {
         InitializeComponent();
-        DataContext = new SettingsWindowViewModel(services);
+        DataContext = viewModel ?? throw new System.ArgumentNullException(nameof(viewModel));
         Closed += HandleClosed;
     }
 
     /// <summary>
-    /// Preserves the XAML loader constructor for designer or framework activation.
+    /// Provides the XAML loader and designer entry point without composing runtime dependencies.
     /// </summary>
     public SettingsWindow()
-        : this(App.Services)
     {
+        InitializeComponent();
     }
 
     /// <summary>

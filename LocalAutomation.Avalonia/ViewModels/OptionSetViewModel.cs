@@ -1,6 +1,5 @@
 using System;
 using LocalAutomation.Runtime;
-using LocalAutomationApplicationHost = LocalAutomation.Application.LocalAutomationApplicationHost;
 
 namespace LocalAutomation.Avalonia.ViewModels;
 
@@ -14,13 +13,8 @@ public class OptionSetViewModel : ViewModelBase
     /// <summary>
     /// Creates an option set view model around a runtime operation options instance.
     /// </summary>
-    public OptionSetViewModel(LocalAutomationApplicationHost services, OperationOptions options, object? propertyGridTarget = null)
+    public OptionSetViewModel(OperationOptions options, object? propertyGridTarget = null)
     {
-        if (services == null)
-        {
-            throw new ArgumentNullException(nameof(services));
-        }
-
         Options = options ?? throw new ArgumentNullException(nameof(options));
         _name = options.Name;
         PropertyGridTarget = propertyGridTarget ?? options;
