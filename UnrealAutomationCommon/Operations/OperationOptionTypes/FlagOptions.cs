@@ -26,5 +26,11 @@ namespace UnrealAutomationCommon.Operations.OperationOptionTypes
         [property: DisplayName("No Messaging")]
         [property: Description("Adds -NoMessaging to launched Unreal processes to disable Unreal's message bus transports.")]
         private bool noMessaging = false;
+
+        // DDC force-memory mode gives validation launches a writable transient cache when shared Zen storage is unavailable.
+        [ObservableProperty]
+        [property: DisplayName("DDC Force Memory Cache")]
+        [property: Description("Adds -DDC-ForceMemoryCache to launched Unreal processes so Derived Data Cache writes stay process-local.")]
+        private bool ddcForceMemoryCache = false;
     }
 }

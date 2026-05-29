@@ -1119,8 +1119,10 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         /// </summary>
         private static void ApplyValidationLaunchFlags(global::LocalAutomation.Runtime.OperationParameters launchParameters)
         {
-            // Deploy validation launches are controlled automation runs, so they disable Unreal message-bus transports.
-            launchParameters.GetOptions<FlagOptions>().NoMessaging = true;
+            // Deploy validation launches are controlled automation runs with process-local runtime dependencies.
+            FlagOptions flagOptions = launchParameters.GetOptions<FlagOptions>();
+            flagOptions.NoMessaging = true;
+            flagOptions.DdcForceMemoryCache = true;
         }
 
         /// <summary>

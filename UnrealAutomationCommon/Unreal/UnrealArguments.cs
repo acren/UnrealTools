@@ -56,6 +56,11 @@ namespace UnrealAutomationCommon.Unreal
                 arguments.SetFlag("NoMessaging");
             }
 
+            if (flagOptions.DdcForceMemoryCache)
+            {
+                arguments.SetFlag("DDC-ForceMemoryCache");
+            }
+
             AutomationOptions automationOpts = operationParameters.GetOptions<AutomationOptions>();
             if (automationOpts.RunTests)
             {
