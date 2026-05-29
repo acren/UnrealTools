@@ -41,7 +41,7 @@ namespace UnrealAutomationCommon.Unreal
         }
 
         /// <summary>
-        /// Creates a descriptor-only Unreal project without modules, plugins, content, or source files.
+        /// Creates a descriptor-only Unreal project without modules, plugins, content assets, or source files.
         /// </summary>
         public static Project CreateEmpty(string projectPath, string projectName, EngineVersion? engineVersion = null)
         {
@@ -50,6 +50,9 @@ namespace UnrealAutomationCommon.Unreal
             string resolvedProjectPath = RequireText(projectPath, nameof(projectPath), "Project path is required.");
             string resolvedProjectName = RequireText(projectName, nameof(projectName), "Project name is required.");
             Directory.CreateDirectory(resolvedProjectPath);
+            /* Unreal registers a watcher for the project content root during editor startup, so generated project shells
+               include the directory even when no assets are authored into it. */
+            Directory.CreateDirectory(Path.Combine(resolvedProjectPath, "Content"));
             ProjectDescriptor.CreateEmpty(engineVersion).Save(Path.Combine(resolvedProjectPath, resolvedProjectName + ".uproject"));
             return new Project(resolvedProjectPath);
         }
