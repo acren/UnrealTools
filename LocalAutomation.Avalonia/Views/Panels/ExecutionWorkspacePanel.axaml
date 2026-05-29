@@ -34,6 +34,16 @@
                                                 Classes.closable="{Binding CanClose}"
                                                 PointerPressed="RuntimeTab_PointerPressed"
                                                 Click="RuntimeTab_Click">
+                                            <Button.ContextMenu>
+                                                <!-- Session-level actions belong to the tab because they act on the whole run,
+                                                     not on the currently selected log scope inside the details pane. -->
+                                                <ContextMenu IsVisible="{Binding CanShowSessionActions}">
+                                                    <MenuItem Header="Copy Log Path"
+                                                              Tag="{Binding}"
+                                                              IsEnabled="{Binding CanCopySessionLogPath}"
+                                                              Click="CopyRuntimeTabLogPath_Click" />
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
                                             <Button.Content>
                                                 <!-- One shared tab-content layout keeps the optional status dot and
                                                      subtitle behavior in a single place for both task tabs and the

@@ -280,7 +280,8 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             kind: RuntimeWorkspaceTabKind.ExecutionSession,
             presentation: new RuntimeWorkspaceTabPresentation(showGraph: true, showLog: true, showSubtitle: true, showStatusMarker: true, showRuntimeMetrics: true),
             graph: graph,
-            session: session);
+            session: session,
+            sessionLogFilePath: _execution.GetSessionLogFilePath(session.Id));
         /* Runtime child-task insertion can mutate the live session graph between reads, so build the shared task-view
            registry and the rendered graph from the same materialized snapshot each time. */
         List<RuntimeExecutionTask> taskSnapshot = session.Tasks.ToList();
@@ -520,6 +521,36 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         }
 
         RemoveRuntimeTab(runtimeTab);
+    }
+
+    /// <summary>
+    /// Reports that the provided execution session tab's durable log path was copied to the clipboard.
+    /// </summary>
+    public void ReportSessionLogPathCopied(RuntimeWorkspaceTabViewModel runtimeTab)
+    {
+        if (runtimeTab == null)
+        {
+            throw new ArgumentNullException(nameof(runtimeTab));
+        }
+
+        _setStatus($"Copied log path for {runtimeTab.Title.ToLowerInvariant()}.");
+    }
+
+    /// <summary>
+    /// Reports that the requested execution session does not have a durable log file path available.
+    /// </summary>
+    public void ReportSessionLogPathUnavailable(RuntimeWorkspaceTabViewModel? runtimeTab)
+    {
+        string tabName = runtimeTab == null ? "this tab" : runtimeTab.Title.ToLowerInvariant();
+        _setStatus($"No session log path is available for {tabName}.");
+    }
+
+    /// <summary>
+    /// Reports that the current window cannot access the platform clipboard for tab actions.
+    /// </summary>
+    public void ReportClipboardUnavailable()
+    {
+        _setStatus("Clipboard access is not available in this window.");
     }
 
     /// <summary>

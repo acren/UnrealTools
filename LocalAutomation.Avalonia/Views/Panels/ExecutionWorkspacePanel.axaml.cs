@@ -83,6 +83,36 @@ public partial class ExecutionWorkspacePanel : UserControl
     }
 
     /// <summary>
+    /// Copies an execution session tab's durable log file path from the tab-strip context menu.
+    /// </summary>
+    private async void CopyRuntimeTabLogPath_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { Tag: RuntimeWorkspaceTabViewModel runtimeTab })
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(runtimeTab.SessionLogFilePath))
+        {
+            ViewModel.ReportSessionLogPathUnavailable(runtimeTab);
+            e.Handled = true;
+            return;
+        }
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard == null)
+        {
+            ViewModel.ReportClipboardUnavailable();
+            e.Handled = true;
+            return;
+        }
+
+        await clipboard.SetTextAsync(runtimeTab.SessionLogFilePath);
+        ViewModel.ReportSessionLogPathCopied(runtimeTab);
+        e.Handled = true;
+    }
+
+    /// <summary>
     /// Cancels the current execution session when one is active.
     /// </summary>
     private async void Terminate_Click(object? sender, RoutedEventArgs e)
