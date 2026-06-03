@@ -159,6 +159,10 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             public string EnginePluginOperationOutputPath => PathFor("EnginePluginPackage");
             public string BlueprintOperationOutputPath => PathFor("BlueprintOnlyPackage");
             public string DemoOperationOutputPath => PathFor("DemoExe");
+            /// <summary>
+            /// Gets the run-scoped output root used only for strict include validation package passes.
+            /// </summary>
+            public string StrictIncludeValidationOutputPath => PathFor("StrictIncludeValidationOutput");
             public string BlueprintTestPackageSnapshotPath => PathFor("BlueprintPackageTestSnapshot");
             public string ExampleArchiveProjectPath => PathFor("ExampleProjectArchive");
             public string InstalledEnginePluginPath => Path.Combine(_engineTargetPath, @"Engine\Plugins\Marketplace", _pluginName);
@@ -391,7 +395,9 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder prepareWorkspace = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder stagePlugin = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder pluginArtifactsFlow = default!;
+                global::LocalAutomation.Runtime.ExecutionTaskBuilder strictIncludeValidation = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder packageDistributablePluginArtifact = default!;
+                PluginBuildOptions pluginBuildOptions = operationParameters.GetOptions<PluginBuildOptions>();
                 prepareWorkspace = steps.Task("Prepare Workspace")
                     .Describe("Create the isolated engine-specific workspace from the prepared source")
                     .Run(PrepareStepAsync);
@@ -411,9 +417,32 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                         .WithExecutionLocks(UnrealExecutionLocks.GlobalBuild)
                         .Run(RemoveExistingEnginePluginInstallAsync);
 
+                    strictIncludeValidation = pluginArtifactScope.AddChildOperation(
+                            "Validate Strict Includes",
+                            new PackageDistributablePlugin(),
+                            () => CreatePluginPackageAuthoringParameters(operationParameters, strictIncludes: true),
+                            "Run strict include validation against the staged package input without feeding distributable archives",
+                            context =>
+                            {
+                                DeploymentWorkspaceState state = context.GetData<DeploymentWorkspaceState>();
+                                global::LocalAutomation.Runtime.Workspace workspace = state.Layout.DistributablePluginPackageWorkspace;
+                                Plugin packagePlugin = CreateRequiredPlugin(workspace.GetPath("HostProject", "Plugins", state.SourcePlugin.Name), "Persistent host-project plugin is not available for strict include validation");
+                                global::LocalAutomation.Runtime.OperationParameters parameters = operationParameters.CreateChild();
+                                parameters.Target = packagePlugin;
+                                parameters.OutputPathOverride = state.Layout.StrictIncludeValidationOutputPath;
+                                parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
+
+                                // Strict include validation is intentionally isolated from the distributable package output.
+                                parameters.GetOptions<PluginBuildOptions>().StrictIncludes = true;
+                                return parameters;
+                            })
+                        .When(pluginBuildOptions.StrictIncludes, "Strict Includes is off.")
+                        .After(stagePlugin.Id, removeExistingEnginePluginInstall.Id)
+                        .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.DistributablePluginPackageWorkspace.MutationLocks);
+
                     packageDistributablePluginArtifact = pluginArtifactScope.AddChildOperation(
                             new PackageDistributablePlugin(),
-                            () => CreatePluginPackageAuthoringParameters(operationParameters),
+                            () => CreatePluginPackageAuthoringParameters(operationParameters, strictIncludes: false),
                             context =>
                             {
                                 DeploymentWorkspaceState state = context.GetData<DeploymentWorkspaceState>();
@@ -423,6 +452,9 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 parameters.Target = packagePlugin;
                                 parameters.OutputPathOverride = state.Layout.BuiltPluginPath;
                                 parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
+
+                                // Distributable package artifacts use normal BuildPlugin outputs so validation flags do not inflate archives.
+                                parameters.GetOptions<PluginBuildOptions>().StrictIncludes = false;
                                 return parameters;
                             })
                         .After(stagePlugin.Id, removeExistingEnginePluginInstall.Id)
@@ -1129,13 +1161,17 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         /// Creates authoring-time package parameters from the source plugin so prepared package subtasks can be previewed.
         /// </summary>
         private global::LocalAutomation.Runtime.OperationParameters CreatePluginPackageAuthoringParameters(
-            global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+            global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters,
+            bool strictIncludes)
         {
             Plugin plugin = GetRequiredTarget(operationParameters);
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             global::LocalAutomation.Runtime.OperationParameters parameters = operationParameters.CreateChild();
             parameters.Target = plugin;
             parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { engine.Version };
+
+            // Child package previews must match the runtime package role instead of inheriting the deploy-wide toggle.
+            parameters.GetOptions<PluginBuildOptions>().StrictIncludes = strictIncludes;
             return parameters;
         }
 
