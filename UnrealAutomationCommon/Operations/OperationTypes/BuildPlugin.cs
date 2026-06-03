@@ -47,6 +47,14 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 return "Build Plugin could not resolve a host project engine install";
             }
 
+            string? buildBatRequirementsError = base.CheckRequirementsSatisfied(operationParameters);
+            if (buildBatRequirementsError != null)
+            {
+                // Shared Build.bat validation covers compiler, language-standard, and engine-selection rules.
+                activity.SetTag("result", buildBatRequirementsError);
+                return buildBatRequirementsError;
+            }
+
             activity.SetTag("result", "Success");
             return null;
         }

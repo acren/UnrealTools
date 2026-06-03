@@ -47,7 +47,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             UbtCompilerOptions buildBatOptions = operationParameters.GetOptions<UbtCompilerOptions>();
 
             Engine? engine = GetTargetEngineInstall(operationParameters);
-            if (engine?.Version == null)
+            if (engine == null)
             {
                 return null;
             }
@@ -59,6 +59,16 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 return $"C++17 is not supported for Unreal Engine {engineVersion.MajorMinorString} or newer";
             }
 
+            if (buildBatOptions.Compiler == UbtCompiler.Clang)
+            {
+                // Clang builds need the selected engine's preferred family before UBT is launched.
+                string? compilerVersionError = UbtClangToolchainPreferences.TryGetPreferredToolchain(engine, out _, out _);
+                if (compilerVersionError != null)
+                {
+                    return compilerVersionError;
+                }
+            }
+
             return null;
         }
 
@@ -68,8 +78,15 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
 
             // Let derived operations describe the target-specific portion of the Build.bat invocation first.
             ConfigureBuildArguments(operationParameters, args);
-            ApplySharedBuildArguments(operationParameters, args);
-            return new global::LocalAutomation.Runtime.Command(GetRequiredTargetEngineInstall(operationParameters).GetBuildPath(), args.ToString());
+            string? clangToolchainRoot = ApplySharedBuildArguments(operationParameters, args);
+            global::LocalAutomation.Runtime.Command command = new(GetRequiredTargetEngineInstall(operationParameters).GetBuildPath(), args.ToString());
+            if (!string.IsNullOrWhiteSpace(clangToolchainRoot))
+            {
+                // UBT reads LLVM_PATH while discovering Clang, so set it only for this Build.bat process.
+                command.EnvironmentVariables["LLVM_PATH"] = clangToolchainRoot;
+            }
+
+            return command;
         }
 
         // Derived operations can provide target-specific arguments, while raw Build.bat callers can rely entirely on
@@ -90,16 +107,30 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         // Apply the shared direct-UBT overrides only for Build.bat flows that are known to respect them.
-        protected void ApplySharedBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
+        protected string? ApplySharedBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
         {
             UbtCompilerOptions buildBatOptions = operationParameters.GetOptions<UbtCompilerOptions>();
             UbtCompiler compiler = buildBatOptions.Compiler;
             UbtCppStandard cppStandard = buildBatOptions.CppStandard;
+            string? clangToolchainRoot = null;
 
             // Only emit an explicit compiler flag when the user has opted out of the engine default behavior.
             if (compiler != UbtCompiler.Default)
             {
                 args.SetKeyValue("Compiler", compiler.ToString());
+            }
+
+            if (compiler == UbtCompiler.Clang)
+            {
+                Engine engine = GetRequiredTargetEngineInstall(operationParameters);
+                string? compilerVersionError = UbtClangToolchainPreferences.TryGetPreferredToolchain(engine, out string compilerVersion, out clangToolchainRoot);
+                if (compilerVersionError != null)
+                {
+                    throw new System.InvalidOperationException(compilerVersionError);
+                }
+
+                // Pin UBT to the engine-preferred Clang family so it cannot auto-select a later unsupported family.
+                args.SetKeyValue("CompilerVersion", compilerVersion);
             }
 
             // Only emit an explicit language standard when the user has selected one of the supported UBT values.
@@ -109,6 +140,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             }
 
             args.AddAdditionalArguments(operationParameters);
+            return clangToolchainRoot;
         }
     }
 }

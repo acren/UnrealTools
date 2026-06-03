@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -46,6 +47,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            ApplyCommandEnvironment(startInfo, command.EnvironmentVariables);
 
             using (global::LocalAutomation.Core.PerformanceActivityScope startProcessActivity = global::LocalAutomation.Core.PerformanceTelemetry.StartActivity("CommandProcessOperation.StartProcess"))
             {
@@ -98,6 +100,22 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             await registration.DisposeAsync().ConfigureAwait(false);
 
             return HandleProcessEnded(logger, state.Process, state.FileAndProcess, state.WasCancelled);
+        }
+
+        /// <summary>
+        /// Applies environment overrides to the child process without mutating the parent process environment.
+        /// </summary>
+        private static void ApplyCommandEnvironment(ProcessStartInfo startInfo, IEnumerable<KeyValuePair<string, string>> environmentVariables)
+        {
+            foreach (KeyValuePair<string, string> environmentVariable in environmentVariables)
+            {
+                if (string.IsNullOrWhiteSpace(environmentVariable.Key))
+                {
+                    throw new InvalidOperationException("Command environment variable names must not be blank.");
+                }
+
+                startInfo.Environment[environmentVariable.Key] = environmentVariable.Value;
+            }
         }
 
         /// <summary>
