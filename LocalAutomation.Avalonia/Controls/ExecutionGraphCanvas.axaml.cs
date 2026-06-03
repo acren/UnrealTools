@@ -30,7 +30,7 @@ public partial class ExecutionGraphCanvas : UserControl
 {
     /* These viewport constants keep wheel zoom predictable while allowing large execution plans to zoom farther out. */
     private const double DefaultZoom = 1.0;
-    private const double MinZoom = 0.2;
+    private const double MinZoom = 0.1;
     private const double MaxZoom = 2.5;
     private const double ZoomStep = 1.15;
     private const double ViewportRecoveryMargin = 40;
