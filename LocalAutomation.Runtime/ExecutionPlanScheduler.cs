@@ -252,7 +252,7 @@ public sealed class ExecutionPlanScheduler
             throw new InvalidOperationException($"Child operation '{operation.OperationName}' returned before all inserted tasks reached terminal state.");
         }
 
-        OperationResult result = BuildChildOperationResult(operation, mergeResult.InsertedTaskIds);
+        OperationResult result = BuildChildOperationResult(mergeResult.InsertedTaskIds);
         activity.SetTag("result.outcome", result.Outcome.ToString())
             .SetTag("result.success", result.Success);
         _logger.LogDebug(
@@ -1007,31 +1007,20 @@ public sealed class ExecutionPlanScheduler
     /// <summary>
     /// Builds the child-operation result from the terminal states reached by the inserted child tasks.
     /// </summary>
-    private OperationResult BuildChildOperationResult(Operation operation, IReadOnlyCollection<ExecutionTaskId> childTaskIds)
+    private OperationResult BuildChildOperationResult(IReadOnlyCollection<ExecutionTaskId> childTaskIds)
     {
-        List<string> warnings = new();
-        foreach (LogEntry entry in _session.LogStream.Entries.Where(entry => ExecutionTaskId.FromNullable(entry.TaskId) is ExecutionTaskId taskId && childTaskIds.Contains(taskId)))
-        {
-            if (entry.Verbosity == LogLevel.Warning)
-            {
-                warnings.Add(entry.Message);
-            }
-        }
-
         IReadOnlyList<ExecutionTask> childStates = childTaskIds
             .Select(taskId => _session.GetTask(taskId))
             .ToList();
-        return BuildResultFromTasks(childStates, failOnWarning: operation.ShouldFailOnWarning(), warnings: warnings, treatSkippedAsFailure: true);
+        return BuildResultFromTasks(childStates, treatSkippedAsFailure: true);
     }
 
     /// <summary>
     /// Builds an operation result from terminal task outcomes while preserving the scheduler's existing precedence rules
-    /// for failure, interruption, cancellation, warning failure, and success.
+    /// for failure, interruption, cancellation, and success.
     /// </summary>
     private static OperationResult BuildResultFromTasks(
         IReadOnlyList<ExecutionTask> tasks,
-        bool failOnWarning = false,
-        IReadOnlyList<string>? warnings = null,
         bool encounteredFailure = false,
         bool encounteredCancellation = false,
         bool treatSkippedAsFailure = false)
@@ -1053,11 +1042,6 @@ public sealed class ExecutionPlanScheduler
             return OperationResult.Cancelled();
         }
 
-        if (failOnWarning && warnings != null && warnings.Count > 0)
-        {
-            return OperationResult.Failed();
-        }
-
         return OperationResult.Succeeded();
     }
 
@@ -1075,8 +1059,8 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Dispatches one already-resolved task body onto worker execution. The scheduler owns execution policy such as
-    /// off-thread dispatch and lock lifetime, but it no longer reconstructs task selection or runtime context because the
+    /// Dispatches one already-resolved task body onto worker execution. The scheduler owns worker dispatch and lock
+    /// lifetime, but it no longer reconstructs task selection or runtime context because the
     /// session start path already performed that shared task-local work.
     /// </summary>
     private void StartTaskExecutionAsync(
@@ -1111,7 +1095,9 @@ public sealed class ExecutionPlanScheduler
     /// Executes one started task body while preserving task-state error and cancellation reporting at the scheduler
     /// boundary.
     /// </summary>
-    private async Task<OperationResult> ExecuteTaskBodyAsync(ExecutionTask task, Func<Task<OperationResult>> executeAsync)
+    private async Task<OperationResult> ExecuteTaskBodyAsync(
+        ExecutionTask task,
+        Func<Task<OperationResult>> executeAsync)
     {
         ILogger taskLogger = CreateTaskLogger(task.Id);
         using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ExecutionPlanScheduler.ExecuteTaskBody")

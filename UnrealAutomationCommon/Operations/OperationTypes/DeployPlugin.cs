@@ -1745,10 +1745,5 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 });
         }
 
-        protected override bool FailOnWarning()
-        {
-            return true;
-        }
-
     }
 }

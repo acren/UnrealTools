@@ -171,28 +171,11 @@ public abstract class Operation
     }
 
     /// <summary>
-    /// Returns whether warnings should fail the operation.
-    /// </summary>
-    protected virtual bool FailOnWarning()
-    {
-        return false;
-    }
-
-    /// <summary>
     /// Declares any exclusive locks the runtime should hold while this operation's task body is executing.
     /// </summary>
     protected virtual IEnumerable<ExecutionLock> GetExecutionLocks(ValidatedOperationParameters operationParameters)
     {
         return Array.Empty<ExecutionLock>();
-    }
-
-    /// <summary>
-    /// Exposes the warning-failure policy to the framework-owned execution pipeline without making callers subclass this
-    /// type just to inspect the configured behavior.
-    /// </summary>
-    internal bool ShouldFailOnWarning()
-    {
-        return FailOnWarning();
     }
 
     internal IReadOnlyList<ExecutionLock> GetDeclaredExecutionLocks(ValidatedOperationParameters operationParameters)

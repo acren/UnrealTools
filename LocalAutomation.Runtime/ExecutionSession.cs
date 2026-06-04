@@ -1098,17 +1098,11 @@ public sealed class ExecutionSession
             if (errorCount > 0)
             {
                 aggregateLogger.LogError("{ErrorCount} error(s) encountered", errorCount);
-                result.Outcome = ExecutionTaskOutcome.Failed;
             }
 
             if (warningCount > 0)
             {
                 aggregateLogger.LogWarning("{WarningCount} warning(s) encountered", warningCount);
-                if (operation.ShouldFailOnWarning())
-                {
-                    aggregateLogger.LogError("Operation fails on warnings");
-                    result.Outcome = ExecutionTaskOutcome.Failed;
-                }
             }
         }
 
