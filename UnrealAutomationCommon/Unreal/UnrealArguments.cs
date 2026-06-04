@@ -61,6 +61,12 @@ namespace UnrealAutomationCommon.Unreal
                 arguments.SetFlag("DDC-ForceMemoryCache");
             }
 
+            if (flagOptions.Multiprocess)
+            {
+                // Multiprocess forwards Unreal's secondary-process marker when the typed launch flag is enabled.
+                arguments.SetFlag("Multiprocess");
+            }
+
             AutomationOptions automationOpts = operationParameters.GetOptions<AutomationOptions>();
             if (automationOpts.RunTests)
             {

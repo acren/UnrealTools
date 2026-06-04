@@ -978,6 +978,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             launchEditorParams.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
             launchEditorParams.SetOptions(automationOptions);
             ApplyValidationLaunchFlags(launchEditorParams);
+            // Editor validation is an automation child process, so Unreal should treat it as a secondary process.
+            launchEditorParams.GetOptions<FlagOptions>().Multiprocess = true;
 
             await RunChildOperationAsync<LaunchProjectEditor>(launchEditorParams, context, required: true, failureMessage: "Failed to launch project-plugin base in editor", hideChildOperationRootInGraph: true);
             activity.SetTag("result", "Completed");
@@ -1000,6 +1002,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             launchStandaloneParams.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
             launchStandaloneParams.SetOptions(automationOptions);
             ApplyValidationLaunchFlags(launchStandaloneParams);
+            // Standalone validation uses the editor executable with -game, so it receives secondary-process semantics too.
+            launchStandaloneParams.GetOptions<FlagOptions>().Multiprocess = true;
 
             await RunChildOperationAsync<LaunchStandalone>(launchStandaloneParams, context, required: true, failureMessage: "Failed to launch project-plugin base in standalone", hideChildOperationRootInGraph: true);
             activity.SetTag("result", "Completed");
@@ -1372,6 +1376,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             launchEditorParams.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
             launchEditorParams.SetOptions(automationOptions);
             ApplyValidationLaunchFlags(launchEditorParams);
+            // Empty-project editor validation is a throwaway automation child process.
+            launchEditorParams.GetOptions<FlagOptions>().Multiprocess = true;
 
             await RunChildOperationAsync<LaunchProjectEditor>(launchEditorParams, context, required: true, failureMessage: "Failed to launch empty engine-plugin project in editor", hideChildOperationRootInGraph: true);
             activity.SetTag("result", "Completed");

@@ -30,5 +30,10 @@ namespace UnrealAutomationCommon.Operations.OperationOptionTypes
         [property: DisplayName("DDC Force Memory Cache")]
         [property: Description("Adds -DDC-ForceMemoryCache to launched Unreal processes so Derived Data Cache writes stay process-local.")]
         private bool ddcForceMemoryCache = false;
+
+        [ObservableProperty]
+        [property: DisplayName("Multiprocess")]
+        [property: Description("Adds -Multiprocess to mark the launched Unreal process as a secondary process.")]
+        private bool multiprocess = false;
     }
 }
