@@ -119,6 +119,15 @@ public sealed class ExecutionTaskBuilder : ExecutionNodeBuilderBase<ExecutionTas
     }
 
     /// <summary>
+    /// Declares the retry policy that wraps this task body when transient failures are safe to rerun.
+    /// </summary>
+    public ExecutionTaskBuilder WithRetry(ExecutionRetryPolicy policy)
+    {
+        _task.SetRetryPolicy(policy ?? throw new ArgumentNullException(nameof(policy)));
+        return this;
+    }
+
+    /// <summary>
     /// Attaches the async execution body for this task.
     /// </summary>
     public ExecutionTaskBuilder Run(Func<ExecutionTaskContext, Task> executeAsync)

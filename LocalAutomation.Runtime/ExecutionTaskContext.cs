@@ -288,6 +288,14 @@ public sealed class ExecutionTaskContext : IOperationParameterContext
     }
 
     /// <summary>
+    /// Creates an equivalent context whose task logger is replaced for one retry attempt.
+    /// </summary>
+    internal ExecutionTaskContext WithLogger(ILogger logger)
+    {
+        return new ExecutionTaskContext(TaskId, Title, logger, CancellationToken, ValidatedOperationParameters, Operation, _runtime);
+    }
+
+    /// <summary>
     /// Runs a nested child operation through the same live runtime services without exposing session or scheduler objects
     /// directly to task code. Callers can hide the imported child root when the current task is only a thin wrapper around
     /// one child operation and showing both nodes would add duplicate graph noise.

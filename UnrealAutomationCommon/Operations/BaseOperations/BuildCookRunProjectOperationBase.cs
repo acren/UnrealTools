@@ -134,6 +134,14 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
+        /// BuildCookRun can rerun the complete UAT body when setup or package phases hit transient UBT contention.
+        /// </summary>
+        protected override ExecutionRetryPolicy? GetExecutionRetryPolicy(ValidatedOperationParameters operationParameters)
+        {
+            return UnrealBuildRetryPolicies.TransientBuildToolConflictPolicy;
+        }
+
+        /// <summary>
         /// Builds one BuildCookRun command from the shared request model so concrete operations only need to describe the
         /// enabled phases and explicit command settings, not the UAT argument plumbing.
         /// </summary>

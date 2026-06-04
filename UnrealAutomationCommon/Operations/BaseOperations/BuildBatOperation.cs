@@ -35,6 +35,14 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             yield return UnrealExecutionLocks.GlobalBuild;
         }
 
+        /// <summary>
+        /// Direct Build.bat invocations can rerun the complete command body when UBT hits transient tool contention.
+        /// </summary>
+        protected override global::LocalAutomation.Runtime.ExecutionRetryPolicy? GetExecutionRetryPolicy(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        {
+            return UnrealBuildRetryPolicies.TransientBuildToolConflictPolicy;
+        }
+
         // Validate shared direct-UBT overrides once so every Build.bat-backed operation enforces the same limits.
         protected override string? CheckRequirementsSatisfied(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {

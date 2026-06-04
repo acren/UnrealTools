@@ -31,7 +31,21 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// </summary>
         protected override void DescribeExecutionPlan(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.ExecutionTaskBuilder root)
         {
+            global::LocalAutomation.Runtime.ExecutionRetryPolicy? retryPolicy = GetExecutionRetryPolicy(operationParameters);
+            if (retryPolicy != null)
+            {
+                root.WithRetry(retryPolicy);
+            }
+
             root.Run(ExecuteProcessAsync);
+        }
+
+        /// <summary>
+        /// Lets safe process-backed operations opt into complete task-body retries without affecting all command tasks.
+        /// </summary>
+        protected virtual global::LocalAutomation.Runtime.ExecutionRetryPolicy? GetExecutionRetryPolicy(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        {
+            return null;
         }
 
         /// <summary>

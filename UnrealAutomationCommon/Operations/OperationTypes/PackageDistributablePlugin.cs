@@ -98,6 +98,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                         compileSteps.Task(capturedStep.Title)
                             .Describe(capturedStep.Description)
                             .WithExecutionLocks(UnrealExecutionLocks.GlobalBuild)
+                            .WithRetry(UnrealBuildRetryPolicies.TransientBuildToolConflictPolicy)
                             .Run(context => RunBuildStepAsync(context, capturedStep));
                     }
                 });

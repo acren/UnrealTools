@@ -41,7 +41,9 @@ internal sealed class TaskStartResult
     public Task<OperationResult> RunningTask { get; }
 }
 
-internal delegate Task<OperationResult> TaskExecutionRunner(ExecutionTask task, Func<Task<OperationResult>> executeAsync);
+internal delegate Task<OperationResult> TaskExecutionRunner(
+    ExecutionTask task,
+    Func<Task<OperationResult>> executeAsync);
 
 /// <summary>
 /// Immutable authored specification for one execution task. Captures identity, behavior, and graph structure as
@@ -62,6 +64,7 @@ internal record TaskSpec(
     Func<IOperationParameterContext, IReadOnlyList<ExecutionLock>>? ResolveExecutionLocks,
     Func<IOperationParameterContext, OperationParameters>? ResolveOperationParameters,
     Func<ExecutionTaskContext, Task<OperationResult>>? ExecuteAsync,
+    ExecutionRetryPolicy? RetryPolicy,
     bool IsOperationRoot,
     bool IsHiddenInGraph);
 
@@ -189,6 +192,11 @@ public class ExecutionTask : INotifyPropertyChanged
     public string DisabledReason => _spec.DisabledReason;
 
     public IReadOnlyList<Type> DeclaredOptionTypes => _spec.DeclaredOptionTypes;
+
+    /// <summary>
+    /// Gets the optional retry policy authored for this task body.
+    /// </summary>
+    internal ExecutionRetryPolicy? RetryPolicy => _spec.RetryPolicy;
 
     /// <summary>
     /// Gets the current execution lifecycle status for this task scope.
@@ -851,6 +859,14 @@ public class ExecutionTask : INotifyPropertyChanged
     internal void SetExecuteAsync(Func<ExecutionTaskContext, Task<OperationResult>> executeAsync)
     {
         _spec = _spec with { ExecuteAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync)) };
+    }
+
+    /// <summary>
+    /// Assigns the opt-in retry policy that wraps this task body during session execution.
+    /// </summary>
+    internal void SetRetryPolicy(ExecutionRetryPolicy retryPolicy)
+    {
+        _spec = _spec with { RetryPolicy = retryPolicy ?? throw new ArgumentNullException(nameof(retryPolicy)) };
     }
 
     /// <summary>

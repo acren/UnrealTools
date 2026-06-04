@@ -399,6 +399,7 @@ public sealed class ExecutionPlanBuilder
             ResolveExecutionLocks: null,
             ResolveOperationParameters: parentId == null ? _resolveOperationParameters : null,
             ExecuteAsync: null,
+            RetryPolicy: null,
             IsOperationRoot: parentId == null,
             IsHiddenInGraph: false);
         return new ExecutionTask(spec);

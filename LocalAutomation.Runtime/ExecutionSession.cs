@@ -778,13 +778,31 @@ public sealed class ExecutionSession
            Running here therefore means the task body is eligible to execute immediately, not merely queued for locks. */
         startedContext.GetRequiredRuntime().SetTaskState(visibleStartedTask.Id, ExecutionTaskState.Running);
 
-        Func<Task<OperationResult>> executeAsync = async () =>
-        {
-            return await startedTask.Spec.ExecuteAsync!(startedContext).ConfigureAwait(false);
-        };
+        Func<Task<OperationResult>> executeAsync = CreateStartedTaskBody(startedTask, startedContext);
 
         Task<OperationResult> runningTask = runTaskAsync(visibleStartedTask, executeAsync);
         return new TaskStartResult(visibleStartedTask, runningTask);
+    }
+
+    /// <summary>
+    /// Creates the concrete task body that the scheduler will await, wrapping it in retry orchestration only when authored.
+    /// </summary>
+    private static Func<Task<OperationResult>> CreateStartedTaskBody(ExecutionTask startedTask, ExecutionTaskContext startedContext)
+    {
+        Func<ExecutionTaskContext, Task<OperationResult>> taskBody = startedTask.Spec.ExecuteAsync
+            ?? throw new InvalidOperationException($"Task '{startedTask.Title}' has no executable body.");
+        ExecutionRetryPolicy? retryPolicy = startedTask.RetryPolicy;
+        if (retryPolicy == null)
+        {
+            return async () => await taskBody(startedContext).ConfigureAwait(false);
+        }
+
+        return async () => await ExecutionRetryExecutor.ExecuteAsync(
+            retryPolicy,
+            startedTask.Title,
+            startedContext.Logger,
+            startedContext.CancellationToken,
+            attemptLogger => taskBody(startedContext.WithLogger(attemptLogger))).ConfigureAwait(false);
     }
 
     /// <summary>
