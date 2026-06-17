@@ -18,6 +18,22 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
 
         /// <summary>
+        /// Retries ShaderCompileWorker crashes during cooking. SCW crashes are transient infrastructure failures
+        /// (GPU driver thread-safety, VRAM pressure) that almost always resolve on retry.
+        /// </summary>
+        public static ExecutionRetryPolicy TransientShaderCompileCrashPolicy { get; } = new(
+            maxAttempts: 2,
+            shouldRetry: IsTransientShaderCompileCrash,
+            getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
+
+        /// <summary>
+        /// Combined retry policy for packaging operations that OR-composes UBT conflict and SCW crash policies
+        /// so either transient failure pattern triggers a retry with independent attempt budgets.
+        /// </summary>
+        public static ExecutionRetryPolicy CombinedCookRetryPolicy { get; } =
+            ExecutionRetryPolicy.Or(TransientBuildToolConflictPolicy, TransientShaderCompileCrashPolicy);
+
+        /// <summary>
         /// Matches known build-tool contention diagnostics so ordinary compile errors stay single-attempt.
         /// </summary>
         private static bool IsTransientBuildToolConflictFailure(ExecutionRetryContext context)
@@ -36,6 +52,16 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 && Contains(failureText, "MarketplaceRules.dll")
                 && Contains(failureText, "cannot access the file")
                 && Contains(failureText, "being used by another process");
+        }
+
+        /// <summary>
+        /// Matches ShaderCompileWorker crash output in the captured attempt logs.
+        /// </summary>
+        private static bool IsTransientShaderCompileCrash(ExecutionRetryContext context)
+        {
+            string failureText = BuildFailureText(context);
+            return Contains(failureText, "ShaderCompileWorker failed")
+                || Contains(failureText, "Crash inside the platform compiler");
         }
 
         /// <summary>

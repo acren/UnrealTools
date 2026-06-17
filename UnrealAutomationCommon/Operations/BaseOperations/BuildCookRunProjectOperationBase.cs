@@ -138,7 +138,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// </summary>
         protected override ExecutionRetryPolicy? GetExecutionRetryPolicy(ValidatedOperationParameters operationParameters)
         {
-            return UnrealBuildRetryPolicies.TransientBuildToolConflictPolicy;
+            return UnrealBuildRetryPolicies.CombinedCookRetryPolicy;
         }
 
         /// <summary>

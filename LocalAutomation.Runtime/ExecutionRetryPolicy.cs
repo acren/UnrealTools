@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace LocalAutomation.Runtime;
@@ -123,6 +124,17 @@ public sealed class ExecutionRetryPolicy
     }
 
     /// <summary>
+    /// Returns whether the predicate matches the failure, independent of the attempt-number gate.
+    /// Used by <see cref="Or(ExecutionRetryPolicy[])"/> to identify which inner policies match
+    /// without consuming their per-policy attempt budget.
+    /// </summary>
+    internal bool IsFailureRetryable(ExecutionRetryContext context)
+    {
+        _ = context ?? throw new ArgumentNullException(nameof(context));
+        return _shouldRetry(context);
+    }
+
+    /// <summary>
     /// Returns the cancellation-aware delay that should run before the next attempt.
     /// </summary>
     public TimeSpan GetDelay(ExecutionRetryContext context)
@@ -135,5 +147,80 @@ public sealed class ExecutionRetryPolicy
         }
 
         return delay;
+    }
+
+    /// <summary>
+    /// Composes multiple retry policies with OR semantics. The returned policy retries when any inner policy
+    /// matches the failure and has remaining attempt budget. Each inner policy tracks its own attempt count
+    /// independently via <see cref="AsyncLocal{T}"/>, so a burst of failures matching one policy does not
+    /// consume another policy's retry budget.
+    /// </summary>
+    /// <param name="policies">At least two retry policies to compose.</param>
+    /// <exception cref="ArgumentException">Fewer than two policies.</exception>
+    public static ExecutionRetryPolicy Or(params ExecutionRetryPolicy[] policies)
+    {
+        if (policies == null)
+        {
+            throw new ArgumentNullException(nameof(policies));
+        }
+
+        if (policies.Length < 2)
+        {
+            throw new ArgumentException("At least two retry policies are required.", nameof(policies));
+        }
+
+        int maxAttempts = policies.Max(p => p.MaxAttempts);
+        AsyncLocal<int[]> policyAttempts = new();
+
+        return new ExecutionRetryPolicy(
+            maxAttempts: maxAttempts,
+            shouldRetry: context =>
+            {
+                int[] counts = policyAttempts.Value;
+                if (counts == null)
+                {
+                    counts = new int[policies.Length];
+                    policyAttempts.Value = counts;
+                }
+
+                for (int i = 0; i < policies.Length; i++)
+                {
+                    if (!policies[i].IsFailureRetryable(context))
+                    {
+                        continue;
+                    }
+
+                    counts[i]++;
+
+                    if (counts[i] < policies[i].MaxAttempts)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            getDelay: context =>
+            {
+                TimeSpan maxDelay = TimeSpan.Zero;
+
+                for (int i = 0; i < policies.Length; i++)
+                {
+                    if (!policies[i].IsFailureRetryable(context))
+                    {
+                        continue;
+                    }
+
+                    TimeSpan current = policies[i].GetDelay(context);
+                    if (current > maxDelay)
+                    {
+                        maxDelay = current;
+                    }
+                }
+
+                return maxDelay > TimeSpan.Zero
+                    ? maxDelay
+                    : policies[0].GetDelay(context);
+            });
     }
 }
