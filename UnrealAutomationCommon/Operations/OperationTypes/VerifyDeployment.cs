@@ -109,7 +109,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Run(context => PrepareVerificationState(context, currentEngineVersion, verificationStates))
                             .Then("Build Editor Target")
                                 .Describe("Build the prepared verification project editor target before launch and package-only UAT")
-                                .WithExecutionLocks(_ => GetVerificationState(verificationStates, currentEngineVersion).PreparedWorkspace.MutationLocks)
+                                .WithExecutionLocks(_ => GetVerificationState(verificationStates, currentEngineVersion).PreparedWorkspace.MutationLocks
+                                    .Append(UnrealExecutionLocks.GlobalBuild))
                                 .Run(context => BuildEditorTargetAsync(context, GetVerificationState(verificationStates, currentEngineVersion)))
                             .Then("Test Editor")
                                 .Describe("Run the editor verification pass")
@@ -123,11 +124,17 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Run(context => TestStandaloneAsync(context, GetVerificationState(verificationStates, currentEngineVersion)))
                             .Then("Build Package Target")
                                 .Describe("Build the prepared verification project target before the package-only UAT pass")
-                                .WithExecutionLocks(_ => GetVerificationState(verificationStates, currentEngineVersion).PreparedWorkspace.MutationLocks)
+                                .WithExecutionLocks(_ => GetVerificationState(verificationStates, currentEngineVersion).PreparedWorkspace.MutationLocks
+                                    .Append(UnrealExecutionLocks.GlobalBuild))
                                 .Run(context => BuildPackageTargetAsync(context, GetVerificationState(verificationStates, currentEngineVersion)))
                             .Then("Package Project")
                                 .Describe("Cook, stage, pak, and package the prepared verification project without holding the Unreal build lock")
-                                .WithExecutionLocks(_ => GetVerificationState(verificationStates, currentEngineVersion).PreparedWorkspace.MutationLocks)
+                                .WithExecutionLocks(_ =>
+                                {
+                                    VerificationState state = GetVerificationState(verificationStates, currentEngineVersion);
+                                    return state.PreparedWorkspace.MutationLocks
+                                        .Append(UnrealExecutionLocks.GetAutomationToolLock(state.Engine));
+                                })
                                 .Run(context => PackageProjectAsync(context, GetVerificationState(verificationStates, currentEngineVersion)))
                             .Then("Test Package")
                                 .Describe("Run the packaged project verification pass")

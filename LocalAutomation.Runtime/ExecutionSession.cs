@@ -415,7 +415,7 @@ public sealed class ExecutionSession
     /// Inserts one child plan beneath the currently executing task in the live session graph using the shared
     /// task-insertion path.
     /// </summary>
-    public ChildTaskMergeResult MergeChildTasks(ExecutionTaskId parentTaskId, ExecutionPlan childPlan, bool hideChildRootInGraph = false)
+    public ChildTaskMergeResult MergeChildTasks(ExecutionTaskId parentTaskId, ExecutionPlan childPlan, bool hideChildRootInGraph = false, Action<ChildTaskMergeResult>? beforeGraphChanged = null)
     {
         using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ExecutionSession.MergeChildTasks")
             .SetTag("parent.task.id", parentTaskId.Value)
@@ -453,12 +453,16 @@ public sealed class ExecutionSession
 
                 WireObservedDependencies(insertedTasks.Tasks);
                 addTasksActivity.SetTag("inserted.task.count", insertedTaskIds.Count);
-                return new ChildTaskMergeResult(GetTaskCore(insertedTasks.RootTaskId), insertedTasks.Tasks, insertedTaskIds);
+                ChildTaskMergeResult result = new(GetTaskCore(insertedTasks.RootTaskId), insertedTasks.Tasks, insertedTaskIds);
+
+                // The parent task's child-wait lifecycle starts before the graph-change signal lets inserted work start.
+                beforeGraphChanged?.Invoke(result);
+                return result;
             });
         }
 
-        /* Notify the scheduler only after the entire child subtree has been attached under the graph lock so the next
-           traversal sees a coherent post-merge tree. */
+        /* Notify the scheduler only after the entire child subtree has been attached and the parent task has crossed the
+           child-wait boundary, so the next traversal sees a coherent and schedulable post-merge tree. */
         TaskGraphChanged?.Invoke();
         activity.SetTag("inserted.root.title", mergeResult.RootTask.Title)
             .SetTag("inserted.task.count", mergeResult.InsertedTaskIds.Count);
@@ -521,28 +525,43 @@ public sealed class ExecutionSession
                 childPlan.Tasks.Count);
         }
 
-        ChildTaskMergeResult mergeResult;
-        using (PerformanceActivityScope mergeActivity = PerformanceTelemetry.StartActivity("ExecutionSession.RunChildOperation.MergeTasks"))
-        {
-            mergeResult = MergeChildTasks(parentContext.TaskId, childPlan, hideChildOperationRootInGraph);
-            mergeActivity.SetTag("inserted.task.count", mergeResult.InsertedTaskIds.Count)
-                .SetTag("inserted.root.id", mergeResult.RootTask.Id.Value)
-                .SetTag("inserted.root.title", mergeResult.RootTask.Title);
+        ExecutionTask parentTask = GetTask(parentContext.TaskId);
+        OperationResult result = await parentTask.RunInsertedChildWaitAsync(
+            async enterInsertedChildWait =>
+            {
+                ChildTaskMergeResult mergeResult;
+                using (PerformanceActivityScope mergeActivity = PerformanceTelemetry.StartActivity("ExecutionSession.RunChildOperation.MergeTasks"))
+                {
+                    mergeResult = MergeChildTasks(
+                        parentContext.TaskId,
+                        childPlan,
+                        hideChildOperationRootInGraph,
+                        result =>
+                        {
+                            /* Validate the child lock closure before the task crosses into child-wait reservation behavior. */
+                            scheduler.ValidateInsertedChildLockClosure(parentContext, result);
+                            enterInsertedChildWait();
+                        });
+                    mergeActivity.SetTag("inserted.task.count", mergeResult.InsertedTaskIds.Count)
+                        .SetTag("inserted.root.id", mergeResult.RootTask.Id.Value)
+                        .SetTag("inserted.root.title", mergeResult.RootTask.Title);
 
-            parentContext.Logger.LogDebug(
-                "Merged child operation '{ChildOperation}' beneath task '{ParentTaskId}'. Root='{InsertedRootTitle}' ({InsertedRootId}), inserted task ids=[{InsertedTaskIds}]",
-                operation.OperationName,
-                parentContext.TaskId,
-                mergeResult.RootTask.Title,
-                mergeResult.RootTask.Id,
-                string.Join(", ", mergeResult.InsertedTaskIds.Select(taskId => taskId.Value)));
-        }
+                    parentContext.Logger.LogDebug(
+                        "Merged child operation '{ChildOperation}' beneath task '{ParentTaskId}'. Root='{InsertedRootTitle}' ({InsertedRootId}), inserted task ids=[{InsertedTaskIds}]",
+                        operation.OperationName,
+                        parentContext.TaskId,
+                        mergeResult.RootTask.Title,
+                        mergeResult.RootTask.Id,
+                        string.Join(", ", mergeResult.InsertedTaskIds.Select(taskId => taskId.Value)));
+                }
 
-        parentContext.Logger.LogDebug(
-            "Waiting for child operation '{ChildOperation}' inserted tasks to complete beneath task '{ParentTaskId}'.",
-            operation.OperationName,
-            parentContext.TaskId);
-        OperationResult result = await scheduler.WaitForInsertedChildTasksAsync(operation, parentContext, mergeResult).ConfigureAwait(false);
+                parentContext.Logger.LogDebug(
+                    "Waiting for child operation '{ChildOperation}' inserted tasks to complete beneath task '{ParentTaskId}'.",
+                    operation.OperationName,
+                    parentContext.TaskId);
+                return await scheduler.WaitForInsertedChildTasksAsync(operation, parentContext, mergeResult).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+
         activity.SetTag("result.outcome", result.Outcome.ToString())
             .SetTag("result.success", result.Success);
         parentContext.Logger.LogDebug(
@@ -779,8 +798,9 @@ public sealed class ExecutionSession
         startedContext.GetRequiredRuntime().SetTaskState(visibleStartedTask.Id, ExecutionTaskState.Running);
 
         Func<Task<OperationResult>> executeAsync = CreateStartedTaskBody(startedTask, startedContext);
-
-        Task<OperationResult> runningTask = runTaskAsync(visibleStartedTask, executeAsync);
+        Task<OperationResult> runningTask = runTaskAsync(
+            visibleStartedTask,
+            () => startedTask.RunBodyAsync(executeAsync));
         return new TaskStartResult(visibleStartedTask, runningTask);
     }
 

@@ -91,6 +91,8 @@ public class ExecutionTask : INotifyPropertyChanged
     private int _subtreeErrorCount;
     private readonly object _activeExecutionSyncRoot = new();
     private Task<OperationResult>? _activeExecutionTask;
+    // Stores the task-body phase that execution-lock compatibility uses as its authoritative lifecycle source.
+    private int _bodyStatus;
     private readonly Dictionary<Type, object> _dataByType = new();
     /* Operation parameters are resolved lazily once per operation root so every task in that operation subtree observes
        one coherent target, option, and output-path bag during the live run. */
@@ -122,6 +124,7 @@ public class ExecutionTask : INotifyPropertyChanged
            state because no scheduler work remains for them, while their semantic outcome still reports Disabled. */
         _state = spec.Enabled ? ExecutionTaskState.Planned : ExecutionTaskState.Completed;
         _outcome = spec.Enabled ? null : ExecutionTaskOutcome.Disabled;
+        SetBodyStatus(GetInitialBodyStatus(), notifyLockWaiters: false);
         ResetSubtreeMetrics();
     }
 
@@ -263,6 +266,11 @@ public class ExecutionTask : INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>
+    /// Gets the task-owned body phase that determines whether declared locks act as active ownership or reservation behavior.
+    /// </summary>
+    internal ExecutionTaskBodyStatus BodyStatus => (ExecutionTaskBodyStatus)Volatile.Read(ref _bodyStatus);
 
     /// <summary>
     /// Returns whether this task or any descendant currently owns a live execution handle. Scope-level execution locks use
@@ -556,9 +564,8 @@ public class ExecutionTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Returns the locks that protect this task's execution scope. Explicit task-authored locks protect both body tasks
-    /// and bodyless containers, while operation-declared locks are added only for executable task bodies so operation
-    /// defaults do not accidentally serialize structural parent scopes.
+    /// Returns the locks declared for this task's current execution scope. Task-authored locks follow this task's body
+    /// status, while operation-declared locks apply only to executable task bodies.
     /// </summary>
     internal IReadOnlyList<ExecutionLock> GetExecutionScopeLocks(IOperationParameterContext context)
     {
@@ -570,8 +577,8 @@ public class ExecutionTask : INotifyPropertyChanged
             return taskLocks;
         }
 
-        /* Executable task bodies must satisfy both caller-authored scope locks and operation-declared locks. This lets a
-           task protect its caller-specific resource while the underlying operation enforces its own exclusivity rules. */
+        /* Executable task bodies must satisfy both caller-authored locks and operation-declared locks. This lets a task
+           protect its caller-specific resource while the underlying operation enforces its own active-use rules. */
         return NormalizeExecutionLocks(
             taskLocks.Concat(Operation.GetDeclaredExecutionLocks(CreateValidatedOperationParameters(context))));
     }
@@ -671,6 +678,7 @@ public class ExecutionTask : INotifyPropertyChanged
         StartedAt = null;
         FinishedAt = null;
         ResetSubtreeMetrics();
+        SetBodyStatus(GetInitialBodyStatus(), notifyLockWaiters: false);
         lock (_activeExecutionSyncRoot)
         {
             _activeExecutionTask = null;
@@ -718,6 +726,140 @@ public class ExecutionTask : INotifyPropertyChanged
             }
 
             _activeExecutionTask = null;
+        }
+    }
+
+    /// <summary>
+    /// Runs the supplied authored body inside this task's active body-execution lifecycle boundary.
+    /// </summary>
+    internal async Task<OperationResult> RunBodyAsync(Func<Task<OperationResult>> executeAsync)
+    {
+        _ = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
+        EnterBodyExecution();
+        try
+        {
+            return await executeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            CompleteBodyExecution();
+        }
+    }
+
+    /// <summary>
+    /// Marks this authored task body as actively executing its own code after scheduler lock admission succeeds.
+    /// </summary>
+    private void EnterBodyExecution()
+    {
+        if (!HasAuthoredBody)
+        {
+            throw new InvalidOperationException($"Task '{Id}' cannot enter body execution because it has no authored body.");
+        }
+
+        ExecutionTaskBodyStatus currentStatus = BodyStatus;
+        if (currentStatus != ExecutionTaskBodyStatus.NotExecuting)
+        {
+            throw new InvalidOperationException($"Task '{Id}' cannot enter body execution from status '{currentStatus}'.");
+        }
+
+        SetBodyStatus(ExecutionTaskBodyStatus.Executing);
+    }
+
+    /// <summary>
+    /// Runs one inserted-child wait inside this task's child-wait lifecycle boundary. The supplied delegate must invoke
+    /// the provided callback exactly once before inserted child work becomes visible to the scheduler.
+    /// </summary>
+    internal async Task<OperationResult> RunInsertedChildWaitAsync(Func<Action, Task<OperationResult>> waitAsync)
+    {
+        _ = waitAsync ?? throw new ArgumentNullException(nameof(waitAsync));
+        bool enteredInsertedChildWait = false;
+        try
+        {
+            OperationResult result = await waitAsync(
+                () =>
+                {
+                    if (enteredInsertedChildWait)
+                    {
+                        throw new InvalidOperationException($"Task '{Id}' entered child-wait lifecycle more than once during one wait boundary.");
+                    }
+
+                    EnterInsertedChildWait();
+                    enteredInsertedChildWait = true;
+                }).ConfigureAwait(false);
+            if (!enteredInsertedChildWait)
+            {
+                throw new InvalidOperationException($"Task '{Id}' did not enter child-wait lifecycle before inserted child work became visible.");
+            }
+
+            return result;
+        }
+        finally
+        {
+            if (enteredInsertedChildWait)
+            {
+                ResumeBodyExecutionAfterChildWait();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Marks this running body as suspended before inserted child-operation work becomes visible to the scheduler.
+    /// </summary>
+    private void EnterInsertedChildWait()
+    {
+        ExecutionTaskBodyStatus currentStatus = BodyStatus;
+        if (currentStatus != ExecutionTaskBodyStatus.Executing)
+        {
+            throw new InvalidOperationException($"Task '{Id}' cannot wait for inserted child work from body status '{currentStatus}'.");
+        }
+
+        SetBodyStatus(ExecutionTaskBodyStatus.WaitingForChild);
+    }
+
+    /// <summary>
+    /// Marks this child-waiting body as actively executing its own code again after inserted child work completes.
+    /// </summary>
+    private void ResumeBodyExecutionAfterChildWait()
+    {
+        ExecutionTaskBodyStatus currentStatus = BodyStatus;
+        if (currentStatus != ExecutionTaskBodyStatus.WaitingForChild)
+        {
+            throw new InvalidOperationException($"Task '{Id}' cannot resume body execution from status '{currentStatus}'.");
+        }
+
+        SetBodyStatus(ExecutionTaskBodyStatus.Executing);
+    }
+
+    /// <summary>
+    /// Marks this task body inactive after its authored execution delegate has finished.
+    /// </summary>
+    private void CompleteBodyExecution()
+    {
+        if (!HasAuthoredBody)
+        {
+            return;
+        }
+
+        SetBodyStatus(ExecutionTaskBodyStatus.NotExecuting);
+    }
+
+    /// <summary>
+    /// Returns the inactive body status that matches the current authored task shape.
+    /// </summary>
+    private ExecutionTaskBodyStatus GetInitialBodyStatus()
+    {
+        return HasAuthoredBody ? ExecutionTaskBodyStatus.NotExecuting : ExecutionTaskBodyStatus.None;
+    }
+
+    /// <summary>
+    /// Publishes one body status value and wakes lock waiters for live lifecycle changes that affect compatibility.
+    /// </summary>
+    private void SetBodyStatus(ExecutionTaskBodyStatus status, bool notifyLockWaiters = true)
+    {
+        ExecutionTaskBodyStatus previousStatus = (ExecutionTaskBodyStatus)Interlocked.Exchange(ref _bodyStatus, (int)status);
+        if (notifyLockWaiters && previousStatus != status)
+        {
+            ExecutionLocks.NotifyOwnerBodyStatusChanged();
         }
     }
 
@@ -815,8 +957,8 @@ public class ExecutionTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Assigns execution locks directly to this authored task body so tests and other builder-authored tasks can model
-    /// contention at the exact task that should acquire the lock.
+    /// Assigns execution locks directly to this authored task so the runtime can apply active ownership or reservation
+    /// behavior from the task's live execution lifecycle.
     /// </summary>
     internal void SetExecutionLocks(IReadOnlyList<ExecutionLock> executionLocks)
     {
@@ -830,7 +972,8 @@ public class ExecutionTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Assigns execution locks that are resolved from the live runtime parameter context before this task body starts.
+    /// Assigns execution locks that are resolved from the live runtime parameter context before this task starts or opens
+    /// descendant work under reservation behavior.
     /// </summary>
     internal void SetExecutionLocks(Func<IOperationParameterContext, IEnumerable<ExecutionLock>> resolveExecutionLocks)
     {
@@ -859,6 +1002,7 @@ public class ExecutionTask : INotifyPropertyChanged
     internal void SetExecuteAsync(Func<ExecutionTaskContext, Task<OperationResult>> executeAsync)
     {
         _spec = _spec with { ExecuteAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync)) };
+        SetBodyStatus(ExecutionTaskBodyStatus.NotExecuting, notifyLockWaiters: false);
     }
 
     /// <summary>

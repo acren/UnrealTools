@@ -234,13 +234,13 @@ public sealed class ExecutionLockWaitTests
     }
 
     /// <summary>
-    /// Confirms that an execution lock declared on a container task protects the authored child subtree, not only a direct
-    /// task body. A same-lock sibling must wait until the container's child work completes.
+    /// Confirms that an execution lock declared on a container task behaves as reservation coverage for the open subtree,
+    /// so an outside same-lock contender waits until the child work completes.
     /// </summary>
     [Fact]
-    public async Task ExecutionLockDeclaredOnContainerProtectsChildSubtree()
+    public async Task ContainerExecutionLockReservationBlocksOutsideSameKeyContender()
     {
-        // Arrange: the parent declares the shared lock, while its child performs the actual long-running work.
+        // Arrange: the container declares the shared lock, while its child keeps the subtree open with long-running work.
         ExecutionLock sharedLock = new("container-scope-lock");
         TaskCompletionSource<bool> childStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource<bool> releaseChild = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -271,7 +271,7 @@ public sealed class ExecutionLockWaitTests
             });
         });
 
-        // Act: start the parent child work, then wait until the contender either blocks correctly or exposes the bug by running.
+        // Act: start the child work, then wait until the outside contender either blocks correctly or runs unexpectedly.
         (_, ExecutionSession session, ExecutionPlanScheduler scheduler) = RuntimeTestUtilities.CreateRuntime(operation);
         Task<OperationResult> executeTask = scheduler.ExecuteAsync(CancellationToken.None);
 
@@ -284,7 +284,7 @@ public sealed class ExecutionLockWaitTests
                 TimeSpan.FromSeconds(1),
                 "Timed out waiting for the same-lock contender to either run or enter lock wait.");
 
-            // Assert: current buggy behavior starts the contender because the parent container's lock is inert.
+            // Assert: the outside contender stays blocked while the container subtree holds reservation coverage.
             Assert.False(contenderStarted.Task.IsCompleted);
             Assert.Equal(ExecutionTaskState.WaitingForExecutionLock, session.GetTask(contenderTaskId).State);
         }
@@ -295,6 +295,54 @@ public sealed class ExecutionLockWaitTests
             releaseContender.TrySetResult(true);
             await executeTask;
         }
+    }
+
+    /// <summary>
+    /// Confirms that a task fails when waiting for child-operation work whose execution-lock closure is not covered by
+    /// the parent's declared lock set.
+    /// </summary>
+    [Fact]
+    public async Task TaskFailsWhenWaitingForChildOperationWithUncoveredExecutionLock()
+    {
+        // Arrange: the parent declares one protected resource while the inserted child operation needs a different one.
+        ExecutionLock workspaceLock = new("exclusive-parent-workspace");
+        ExecutionLock buildLock = new("exclusive-parent-child-build");
+        ExecutionTaskId parentTaskId = default;
+        Operation childOperation = new ExecutionTestCommon.InlineOperation(
+            childRoot =>
+            {
+                // The child represents real protected work that must acquire its own lock before running.
+                childRoot.WithExecutionLocks(buildLock).Run(() => Task.CompletedTask);
+            },
+            operationName: "Locked Child Operation");
+
+        Operation operation = new RuntimeTestUtilities.InlineOperation(root =>
+        {
+            root.Children(scope =>
+            {
+                scope.Task("Exclusive-Lock Parent", out parentTaskId)
+                    .WithExecutionLocks(workspaceLock)
+                    .Run(async context =>
+                    {
+                        /* A task that parks declared locks for child work must cover every lock key the inserted
+                           child operation can need. */
+                        OperationParameters childParameters = childOperation.CreateParameters(context.ValidatedOperationParameters.CreateChild());
+                        OperationResult childResult = await context.RunChildOperationAsync(childOperation, childParameters);
+                        if (!childResult.Success)
+                        {
+                            throw new InvalidOperationException($"Locked child operation returned '{childResult.Outcome}'.");
+                        }
+                    });
+            });
+        });
+
+        // Act: run the real scheduler so dynamic child insertion follows the production runtime path.
+        (_, ExecutionSession session, OperationResult result) = await RuntimeTestUtilities.ExecuteAsync(operation);
+
+        // Assert: partial parent lock coverage should fail before the child waits under an unsafe reservation.
+        Assert.NotEqual(default, parentTaskId);
+        Assert.Equal(ExecutionTaskOutcome.Failed, result.Outcome);
+        Assert.Equal(ExecutionTaskOutcome.Failed, session.GetTask(parentTaskId).Outcome);
     }
 
     /// <summary>

@@ -5,7 +5,7 @@ using LocalAutomation.Runtime;
 namespace UnrealAutomationCommon.Operations.BaseOperations
 {
     /// <summary>
-    /// Provides retry policies for transient Unreal build-tool failures that are safe to rerun as complete task bodies.
+    /// Provides retry policies for transient Unreal build-tool failures and workspace file-lock failures that are safe to rerun as complete task bodies.
     /// </summary>
     internal static class UnrealBuildRetryPolicies
     {
@@ -15,6 +15,15 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         public static ExecutionRetryPolicy TransientBuildToolConflictPolicy { get; } = new(
             maxAttempts: 5,
             shouldRetry: IsTransientBuildToolConflictFailure,
+            getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
+
+        /// <summary>
+        /// Retries file-mutation steps that collide with transient Windows sharing violations while another process still
+        /// holds a workspace file handle briefly after a prior step completed.
+        /// </summary>
+        public static ExecutionRetryPolicy TransientWorkspaceFileLockPolicy { get; } = new(
+            maxAttempts: 5,
+            shouldRetry: IsTransientWorkspaceFileLockFailure,
             getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
 
         /// <summary>
@@ -44,13 +53,30 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
+        /// Matches transient file-sharing violations from workspace mutation tasks so whole-task retries can wait for the
+        /// other process to release the file and then rerun the step cleanly.
+        /// </summary>
+        private static bool IsTransientWorkspaceFileLockFailure(ExecutionRetryContext context)
+        {
+            return IsWindowsSharingViolation(BuildFailureText(context));
+        }
+
+        /// <summary>
         /// Matches the shared BuildRules assembly cache file-lock failure emitted by launcher-engine UBT instances.
         /// </summary>
         private static bool IsSharedBuildRuleFileLockFailure(string failureText)
         {
             return Contains(failureText, "BuildRules")
                 && Contains(failureText, "MarketplaceRules.dll")
-                && Contains(failureText, "cannot access the file")
+                && IsWindowsSharingViolation(failureText);
+        }
+
+        /// <summary>
+        /// Matches the Windows sharing-violation text emitted when one process still has a file open for exclusive access.
+        /// </summary>
+        private static bool IsWindowsSharingViolation(string failureText)
+        {
+            return Contains(failureText, "cannot access the file")
                 && Contains(failureText, "being used by another process");
         }
 

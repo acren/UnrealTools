@@ -12,13 +12,13 @@ namespace LocalAutomation.Runtime;
 /// </summary>
 internal static class ExecutionLocks
 {
-    // Protects the held-key set and waiter list so lock grants are chosen from one coherent global view.
+    // Protects the held-claim set and waiter list so lock grants are chosen from one coherent global view.
     private static readonly object _syncRoot = new();
 
-    // Tracks lock keys currently owned by granted task executions.
-    private static readonly HashSet<string> _heldKeys = new(StringComparer.Ordinal);
+    // Tracks lock claims currently owned by granted task executions or reservation-behavior task scopes.
+    private static readonly List<LockClaim> _heldClaims = new();
 
-    // Stores tasks that are eligible to run except for their declared lock set.
+    // Stores tasks that are eligible to run except for their declared lock claims.
     private static readonly List<LockWaiter> _waiters = new();
 
     // Gives equal-priority waiters a deterministic global FIFO tie-breaker.
@@ -30,36 +30,13 @@ internal static class ExecutionLocks
     internal static event Action? Changed;
 
     /// <summary>
-    /// Provides one no-op lock handle for tasks that do not declare any lock requirements.
-    /// </summary>
-    internal static IAsyncDisposable EmptyHandle => new Releaser(Array.Empty<string>());
-
-    /// <summary>
-    /// Registers or refreshes one scheduler-ready task and acquires its locks only when it is the best eligible waiter.
+    /// Registers or refreshes one scheduler-ready task and atomically acquires all requested claim groups only when that
+    /// ready task is the best eligible waiter. Each group receives its own release handle so task-owned scopes can end at
+    /// their own lifecycle boundaries.
     /// </summary>
     internal static bool TryAcquireOrWait(
         ExecutionTaskId taskId,
-        IEnumerable<ExecutionLock> executionLocks,
-        int priority,
-        out IAsyncDisposable handle)
-    {
-        bool acquired = TryAcquireOrWait(
-            taskId,
-            new[] { (executionLocks ?? throw new ArgumentNullException(nameof(executionLocks))).ToList() },
-            priority,
-            out IReadOnlyList<IAsyncDisposable> handles);
-        handle = handles.Count > 0 ? handles[0] : EmptyHandle;
-        return acquired;
-    }
-
-    /// <summary>
-    /// Registers or refreshes one scheduler-ready task and atomically acquires all requested lock groups only when that
-    /// ready task is the best eligible waiter. Each group receives its own release handle so a task-scope lock can be
-    /// released when its owning task completes without holding unrelated inner task locks for too long.
-    /// </summary>
-    internal static bool TryAcquireOrWait(
-        ExecutionTaskId taskId,
-        IReadOnlyList<IReadOnlyList<ExecutionLock>> executionLockGroups,
+        IReadOnlyList<(ExecutionTask Owner, IReadOnlyList<ExecutionTaskId> OwnerAncestry, ExecutionTaskBodyStatus BodyStatusOnGrant, IReadOnlyList<ExecutionLock> Locks)> executionLockGroups,
         int priority,
         out IReadOnlyList<IAsyncDisposable> handles)
     {
@@ -74,16 +51,14 @@ internal static class ExecutionLocks
             throw new ArgumentNullException(nameof(executionLockGroups));
         }
 
-        IReadOnlyList<IReadOnlyList<string>> keyGroups = GetOrderedKeyGroups(executionLockGroups);
-        IReadOnlyList<string> keys = keyGroups
-            .SelectMany(group => group)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(key => key, StringComparer.Ordinal)
-            .ToList();
-        if (keys.Count == 0)
+        IReadOnlyList<IReadOnlyList<LockClaim>> requestedGroups = BuildRequestedClaimGroups(executionLockGroups);
+        IReadOnlyList<LockClaim> requestedClaims = requestedGroups.SelectMany(group => group).ToList();
+        if (requestedClaims.Count == 0)
         {
             return true;
         }
+
+        ValidateRequestedClaims(requestedClaims);
 
         bool wakeWaiters = false;
         lock (_syncRoot)
@@ -92,7 +67,7 @@ internal static class ExecutionLocks
             long sequence = waiterIndex >= 0
                 ? _waiters[waiterIndex].Sequence
                 : Interlocked.Increment(ref _nextWaiterSequence);
-            LockWaiter waiter = new(taskId, keys, priority, sequence);
+            LockWaiter waiter = new(taskId, requestedClaims, priority, sequence);
             if (waiterIndex >= 0)
             {
                 _waiters[waiterIndex] = waiter;
@@ -103,7 +78,7 @@ internal static class ExecutionLocks
             }
 
             LockWaiter? bestWaiter = _waiters
-                .Where(candidate => ConflictsWith(candidate.Keys, keys) && candidate.Keys.All(key => !_heldKeys.Contains(key)))
+                .Where(candidate => SharesAnyKey(candidate.Claims, requestedClaims) && IsEligible(candidate))
                 .OrderByDescending(candidate => candidate.Priority)
                 .ThenBy(candidate => candidate.Sequence)
                 .Select(candidate => (LockWaiter?)candidate)
@@ -111,12 +86,12 @@ internal static class ExecutionLocks
             if (bestWaiter?.TaskId == taskId)
             {
                 _waiters.RemoveAll(candidate => candidate.TaskId == taskId);
-                foreach (string key in keys)
+                foreach (IReadOnlyList<LockClaim> group in requestedGroups)
                 {
-                    _heldKeys.Add(key);
+                    _heldClaims.AddRange(group);
                 }
 
-                handles = keyGroups.Select(group => (IAsyncDisposable)new Releaser(group)).ToList();
+                handles = requestedGroups.Select(group => (IAsyncDisposable)new Releaser(group)).ToList();
                 return true;
             }
 
@@ -129,6 +104,14 @@ internal static class ExecutionLocks
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Wakes waiters after an owning task changes body status while keeping the same granted lock claims.
+    /// </summary>
+    internal static void NotifyOwnerBodyStatusChanged()
+    {
+        SignalChanged();
     }
 
     /// <summary>
@@ -160,67 +143,144 @@ internal static class ExecutionLocks
     }
 
     /// <summary>
-    /// Normalizes the declared locks into one deterministic ordered key list for conflict checks and release symmetry.
+    /// Normalizes grouped lock declarations into deterministic claim sets while preserving each release group.
     /// </summary>
-    private static IReadOnlyList<string> GetOrderedKeys(IEnumerable<ExecutionLock> executionLocks)
+    private static IReadOnlyList<IReadOnlyList<LockClaim>> BuildRequestedClaimGroups(
+        IReadOnlyList<(ExecutionTask Owner, IReadOnlyList<ExecutionTaskId> OwnerAncestry, ExecutionTaskBodyStatus BodyStatusOnGrant, IReadOnlyList<ExecutionLock> Locks)> executionLockGroups)
     {
-        /* Lock keys are sorted before acquisition so multi-lock tasks always record and release the same normalized set,
-           regardless of the order in which operations declared those locks. */
+        List<IReadOnlyList<LockClaim>> requestedGroups = new();
+        foreach ((ExecutionTask owner, IReadOnlyList<ExecutionTaskId> ownerAncestry, ExecutionTaskBodyStatus bodyStatusOnGrant, IReadOnlyList<ExecutionLock> locks) in executionLockGroups)
+        {
+            if (owner == null)
+            {
+                throw new InvalidOperationException("Execution lock owner task is required.");
+            }
+
+            IReadOnlyList<ExecutionTaskId> normalizedAncestry = NormalizeOwnerAncestry(owner.Id, ownerAncestry);
+            IReadOnlyList<LockClaim> groupClaims = NormalizeExecutionLocks(locks)
+                .Select(executionLock => new LockClaim(executionLock.Key, owner, normalizedAncestry, bodyStatusOnGrant))
+                .ToList();
+            if (groupClaims.Count > 0)
+            {
+                requestedGroups.Add(groupClaims);
+            }
+        }
+
+        return requestedGroups;
+    }
+
+    /// <summary>
+    /// Returns one deterministic lock list from a caller-authored lock set.
+    /// </summary>
+    private static IReadOnlyList<ExecutionLock> NormalizeExecutionLocks(IEnumerable<ExecutionLock> executionLocks)
+    {
+        _ = executionLocks ?? throw new ArgumentNullException(nameof(executionLocks));
         return executionLocks
-            .Select(executionLock => executionLock.Key)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(key => key, StringComparer.Ordinal)
+            .Where(executionLock => executionLock != null)
+            .DistinctBy(executionLock => executionLock.Key, StringComparer.Ordinal)
+            .OrderBy(executionLock => executionLock.Key, StringComparer.Ordinal)
             .ToList();
     }
 
     /// <summary>
-    /// Normalizes grouped lock declarations into deterministic key sets and rejects duplicate ownership of one key inside
-    /// the same atomic acquisition because each granted key must have exactly one release handle.
+    /// Ensures the owner ancestry contains the owner id so descendant compatibility can be answered from a claim alone.
     /// </summary>
-    private static IReadOnlyList<IReadOnlyList<string>> GetOrderedKeyGroups(IReadOnlyList<IReadOnlyList<ExecutionLock>> executionLockGroups)
+    private static IReadOnlyList<ExecutionTaskId> NormalizeOwnerAncestry(ExecutionTaskId ownerTaskId, IReadOnlyList<ExecutionTaskId>? ownerAncestry)
     {
-        HashSet<string> assignedKeys = new(StringComparer.Ordinal);
-        List<IReadOnlyList<string>> keyGroups = new();
-        foreach (IReadOnlyList<ExecutionLock> executionLockGroup in executionLockGroups)
+        List<ExecutionTaskId> ancestry = ownerAncestry?.Where(taskId => taskId != default).Distinct().ToList() ?? new List<ExecutionTaskId>();
+        if (!ancestry.Contains(ownerTaskId))
         {
-            IReadOnlyList<string> groupKeys = GetOrderedKeys(executionLockGroup);
-            if (groupKeys.Count == 0)
-            {
-                continue;
-            }
-
-            foreach (string key in groupKeys)
-            {
-                if (!assignedKeys.Add(key))
-                {
-                    throw new InvalidOperationException($"Execution lock key '{key}' cannot be assigned to more than one release scope in the same acquisition.");
-                }
-            }
-
-            keyGroups.Add(groupKeys);
+            ancestry.Add(ownerTaskId);
         }
 
-        return keyGroups;
+        return ancestry;
     }
 
     /// <summary>
-    /// Returns whether two normalized lock sets overlap on any key.
+    /// Rejects internally incompatible atomic requests before they can strand release handles with conflicting claims.
     /// </summary>
-    private static bool ConflictsWith(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    private static void ValidateRequestedClaims(IReadOnlyList<LockClaim> requestedClaims)
     {
-        return left.Any(right.Contains);
+        for (int leftIndex = 0; leftIndex < requestedClaims.Count; leftIndex += 1)
+        {
+            for (int rightIndex = leftIndex + 1; rightIndex < requestedClaims.Count; rightIndex += 1)
+            {
+                if (!AreCompatible(requestedClaims[leftIndex], requestedClaims[rightIndex]))
+                {
+                    throw new InvalidOperationException($"Execution lock key '{requestedClaims[leftIndex].Key}' cannot be requested by incompatible scopes in the same acquisition.");
+                }
+            }
+        }
     }
 
     /// <summary>
-    /// Releases one granted lock set and wakes all known waiters so their schedulers can retry acquisition.
+    /// Returns whether the waiter can run against all currently held claims.
     /// </summary>
-    private static void Release(IReadOnlyList<string> keys)
+    private static bool IsEligible(LockWaiter waiter)
+    {
+        return waiter.Claims.All(requested => _heldClaims.All(held => AreCompatible(requested, held)));
+    }
+
+    /// <summary>
+    /// Returns whether two waiters belong to the same arbitration lane because they mention at least one common key.
+    /// </summary>
+    private static bool SharesAnyKey(IReadOnlyList<LockClaim> left, IReadOnlyList<LockClaim> right)
+    {
+        return left.Any(leftClaim => right.Any(rightClaim => string.Equals(leftClaim.Key, rightClaim.Key, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// Applies the lock compatibility rule from owner body status: executing bodies conflict with all same-key claimants,
+    /// while reservation-behavior owners admit same-key descendants and block outside claimants.
+    /// </summary>
+    private static bool AreCompatible(LockClaim left, LockClaim right)
+    {
+        if (!string.Equals(left.Key, right.Key, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        bool leftReservationBehavior = HasReservationBehavior(left.CompatibilityStatus);
+        bool rightReservationBehavior = HasReservationBehavior(right.CompatibilityStatus);
+        if (!leftReservationBehavior && !rightReservationBehavior)
+        {
+            return false;
+        }
+
+        if (leftReservationBehavior && IsDescendantOf(right.OwnerTaskId, right.OwnerAncestry, left.OwnerTaskId))
+        {
+            return true;
+        }
+
+        return rightReservationBehavior && IsDescendantOf(left.OwnerTaskId, left.OwnerAncestry, right.OwnerTaskId);
+    }
+
+    /// <summary>
+    /// Returns whether a body status makes declared locks block outsiders while allowing descendant active claims.
+    /// </summary>
+    private static bool HasReservationBehavior(ExecutionTaskBodyStatus bodyStatus)
+    {
+        return bodyStatus is ExecutionTaskBodyStatus.None or ExecutionTaskBodyStatus.WaitingForChild;
+    }
+
+    /// <summary>
+    /// Returns whether the owner is a strict descendant of the supplied ancestor owner.
+    /// </summary>
+    private static bool IsDescendantOf(ExecutionTaskId ownerTaskId, IReadOnlyList<ExecutionTaskId> ownerAncestry, ExecutionTaskId ancestorTaskId)
+    {
+        return ownerTaskId != ancestorTaskId && ownerAncestry.Contains(ancestorTaskId);
+    }
+
+    /// <summary>
+    /// Releases one granted claim set and wakes all known waiters so their schedulers can retry acquisition.
+    /// </summary>
+    private static void Release(Releaser releaser)
     {
         lock (_syncRoot)
         {
-            foreach (string key in keys)
+            foreach (LockClaim claim in releaser.Claims)
             {
-                _heldKeys.Remove(key);
+                _heldClaims.Remove(claim);
             }
         }
 
@@ -236,14 +296,24 @@ internal static class ExecutionLocks
     }
 
     /// <summary>
-    /// Owns one acquired lock-key set and returns those keys to the global coordinator when disposed.
+    /// Owns one acquired claim set and returns those claims to the global coordinator when disposed.
     /// </summary>
-    private sealed class Releaser(IReadOnlyList<string> keys) : IAsyncDisposable
+    private sealed class Releaser(IReadOnlyList<LockClaim> claims) : IAsyncDisposable
     {
         private int _disposed;
 
         /// <summary>
-        /// Releases the granted keys once, skipping notification for the shared lock-free path.
+        /// Gets the mutable claim objects this handle owns in the global held-claim table.
+        /// </summary>
+        internal IReadOnlyList<LockClaim> Claims { get; } = claims;
+
+        /// <summary>
+        /// Gets whether this release handle has already returned its claims to the global coordinator.
+        /// </summary>
+        internal bool IsDisposed => _disposed != 0;
+
+        /// <summary>
+        /// Releases the granted claims once, skipping notification for the shared lock-free path.
         /// </summary>
         public ValueTask DisposeAsync()
         {
@@ -252,9 +322,9 @@ internal static class ExecutionLocks
                 return default;
             }
 
-            if (keys.Count > 0)
+            if (Claims.Count > 0)
             {
-                Release(keys);
+                Release(this);
             }
 
             return default;
@@ -262,8 +332,45 @@ internal static class ExecutionLocks
     }
 
     /// <summary>
-    /// Represents one scheduler-ready task that is blocked only by its requested execution locks.
+    /// Represents one scheduler-ready task that is blocked only by its requested execution-lock claims.
     /// </summary>
-    private readonly record struct LockWaiter(ExecutionTaskId TaskId, IReadOnlyList<string> Keys, int Priority, long Sequence);
+    private readonly record struct LockWaiter(
+        ExecutionTaskId TaskId,
+        IReadOnlyList<LockClaim> Claims,
+        int Priority,
+        long Sequence);
 
+    /// <summary>
+    /// Carries one normalized claim. Granted claims derive lock behavior from the owner task body status so compatibility
+    /// cannot drift away from the task lifecycle.
+    /// </summary>
+    private sealed class LockClaim
+    {
+        public LockClaim(string key, ExecutionTask owner, IReadOnlyList<ExecutionTaskId> ownerAncestry, ExecutionTaskBodyStatus bodyStatusOnGrant)
+        {
+            Key = key;
+            Owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            OwnerAncestry = ownerAncestry;
+            BodyStatusOnGrant = bodyStatusOnGrant;
+        }
+
+        public string Key { get; }
+
+        public ExecutionTask Owner { get; }
+
+        public ExecutionTaskId OwnerTaskId => Owner.Id;
+
+        public IReadOnlyList<ExecutionTaskId> OwnerAncestry { get; }
+
+        private ExecutionTaskBodyStatus BodyStatusOnGrant { get; }
+
+        public ExecutionTaskBodyStatus CompatibilityStatus
+        {
+            get
+            {
+                ExecutionTaskBodyStatus currentStatus = Owner.BodyStatus;
+                return currentStatus == ExecutionTaskBodyStatus.NotExecuting ? BodyStatusOnGrant : currentStatus;
+            }
+        }
+    }
 }

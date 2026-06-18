@@ -84,6 +84,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             {
                 steps.Task("Prepare Host Project")
                     .Describe("Ensure the BuildPlugin-style host project descriptor exists before compiling")
+                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
                     .Run(PrepareHostProjectAsync);
             });
 
@@ -121,6 +122,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             {
                 steps.Task("Package Distributable Plugin Payload")
                     .Describe("Copy the distributable plugin payload out of the generated host project")
+                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
                     .Run(context => PackageAsync(context, buildSteps));
             });
         }

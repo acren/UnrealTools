@@ -99,9 +99,8 @@ public sealed class ExecutionTaskBuilder : ExecutionNodeBuilderBase<ExecutionTas
     }
 
     /// <summary>
-    /// Declares the execution locks that this specific task body must hold while it runs. Task-authored locks apply only
-    /// to this task, so callers can model contention precisely without forcing unrelated sibling tasks in the same
-    /// operation to inherit the same lock set.
+    /// Declares the execution locks for this task. The runtime execution lifecycle determines whether they act as active
+    /// exclusive locks or as subtree reservation behavior while descendant work is open.
     /// </summary>
     public ExecutionTaskBuilder WithExecutionLocks(params ExecutionLock[] executionLocks)
     {
@@ -110,7 +109,8 @@ public sealed class ExecutionTaskBuilder : ExecutionNodeBuilderBase<ExecutionTas
     }
 
     /// <summary>
-    /// Declares execution locks that must be calculated from live runtime data before this task body starts.
+    /// Declares execution locks that must be calculated from live runtime data before this task starts or opens descendant
+    /// work under reservation behavior.
     /// </summary>
     public ExecutionTaskBuilder WithExecutionLocks(Func<IOperationParameterContext, IEnumerable<ExecutionLock>> resolveExecutionLocks)
     {

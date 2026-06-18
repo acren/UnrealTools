@@ -171,7 +171,8 @@ public abstract class Operation
     }
 
     /// <summary>
-    /// Declares any exclusive locks the runtime should hold while this operation's task body is executing.
+    /// Declares operation-level execution locks. The runtime execution lifecycle determines whether they act as active
+    /// exclusive locks or as reservation behavior while inserted child-operation work runs.
     /// </summary>
     protected virtual IEnumerable<ExecutionLock> GetExecutionLocks(ValidatedOperationParameters operationParameters)
     {

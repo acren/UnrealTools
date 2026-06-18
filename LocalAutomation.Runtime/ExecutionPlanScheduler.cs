@@ -27,7 +27,7 @@ public sealed class ExecutionPlanScheduler
     private readonly ExecutionSession _session;
     private readonly object _workSignalSyncRoot = new();
     private readonly object _executionCancellationSyncRoot = new();
-    // Task-scope locks are held by the task that declared them, whether that task owns a body or an authored subtree.
+    // Task-scope locks are held by the task that declared them; behavior comes from the owner's body status.
     private readonly Dictionary<ExecutionTaskId, ActiveExecutionLockScope> _activeExecutionLockScopes = new();
     private TaskCompletionSource<bool> _workAvailableSignal = CreateWorkAvailableSignal();
     private CancellationTokenSource? _schedulerCancellationSource;
@@ -316,7 +316,7 @@ public sealed class ExecutionPlanScheduler
 
     /// <summary>
     /// Acquires every task-scope lock required before the concrete task body starts. One atomic acquisition covers the
-    /// whole owner chain so parent subtree locks and body locks cannot be granted in a deadlocking partial order.
+    /// owner chain so ancestor reservations and body locks cannot be granted in a deadlocking partial order.
     /// </summary>
     private bool TryAcquireExecutionLocksForStart(ExecutionTask visibleTask, ExecutionTask executingTask, int priority)
     {
@@ -327,7 +327,9 @@ public sealed class ExecutionPlanScheduler
             return true;
         }
 
-        IReadOnlyList<IReadOnlyList<ExecutionLock>> lockGroups = pendingScopes.Select(scope => scope.Locks).ToList();
+        IReadOnlyList<(ExecutionTask Owner, IReadOnlyList<ExecutionTaskId> OwnerAncestry, ExecutionTaskBodyStatus BodyStatusOnGrant, IReadOnlyList<ExecutionLock> Locks)> lockGroups = pendingScopes
+            .Select(scope => (scope.Owner, GetOwnerAncestry(scope.Owner), scope.BodyStatusOnGrant, scope.Locks))
+            .ToList();
         if (!ExecutionLocks.TryAcquireOrWait(visibleTask.Id, lockGroups, priority, out IReadOnlyList<IAsyncDisposable> acquiredHandles))
         {
             MarkTaskWaitingForExecutionLocks(visibleTask, executingTask, pendingScopes.SelectMany(scope => scope.Locks).ToList());
@@ -339,53 +341,76 @@ public sealed class ExecutionPlanScheduler
             PendingExecutionLockScope pendingScope = pendingScopes[index];
             ILogger taskLogger = CreateTaskLogger(pendingScope.Owner.Id);
             string lockSummary = string.Join(", ", pendingScope.Locks.Select(executionLock => executionLock.Key));
-            taskLogger.LogInformation("Acquired execution lock(s): {ExecutionLocks}", lockSummary);
+            string modeName = DescribeLockBehavior(pendingScope.BodyStatusOnGrant);
+            taskLogger.LogInformation("Acquired {ExecutionLockMode}: {ExecutionLocks}", modeName, lockSummary);
             _activeExecutionLockScopes.Add(
                 pendingScope.Owner.Id,
                 new ActiveExecutionLockScope(
                     pendingScope.Locks.Select(executionLock => executionLock.Key).ToList(),
-                    new LoggedExecutionLockHandle(acquiredHandles[index], taskLogger, lockSummary)));
+                    new LoggedExecutionLockHandle(acquiredHandles[index], taskLogger, lockSummary, modeName)));
         }
 
         return true;
     }
 
     /// <summary>
-    /// Builds the ordered list of lock scopes that must be active before the supplied task body can run. Ancestor scopes
-    /// appear before the body scope so broad subtree locks are acquired and released by their authored owner tasks.
+    /// Builds the ordered list of lock scopes that must be active before the supplied task body can run. Ancestor owners
+    /// contribute reservation behavior when their body status allows descendant work; the concrete executable task body
+    /// contributes active ownership.
     /// </summary>
     private IReadOnlyList<PendingExecutionLockScope> GetPendingExecutionLockScopes(ExecutionTask executingTask, ExecutionTaskRuntimeServices runtime)
     {
-        HashSet<string> coveredKeys = new(StringComparer.Ordinal);
+        HashSet<string> reservationKeys = new(StringComparer.Ordinal);
         List<PendingExecutionLockScope> pendingScopes = new();
         foreach (ExecutionTask owner in GetExecutionLockOwners(executingTask))
         {
             if (_activeExecutionLockScopes.TryGetValue(owner.Id, out ActiveExecutionLockScope? activeScope))
             {
-                foreach (string key in activeScope.Keys)
+                if (HasReservationBehavior(owner.BodyStatus))
                 {
-                    coveredKeys.Add(key);
+                    foreach (string key in activeScope.Keys)
+                    {
+                        reservationKeys.Add(key);
+                    }
                 }
 
                 continue;
             }
 
-            ExecutionParameterContext parameterContext = new(owner.Id, owner.Title, CreateTaskLogger(owner.Id), _executionCancellationToken, owner.Operation, runtime);
-            List<ExecutionLock> uncoveredLocks = owner.GetExecutionScopeLocks(parameterContext)
-                .Where(executionLock => coveredKeys.Add(executionLock.Key))
-                .ToList();
-            if (uncoveredLocks.Count > 0)
+            ExecutionTaskBodyStatus bodyStatusOnGrant = GetBodyStatusForLockAdmission(owner, executingTask);
+            if (bodyStatusOnGrant == ExecutionTaskBodyStatus.NotExecuting)
             {
-                pendingScopes.Add(new PendingExecutionLockScope(owner, uncoveredLocks));
+                continue;
             }
+
+            ExecutionParameterContext parameterContext = new(owner.Id, owner.Title, CreateTaskLogger(owner.Id), _executionCancellationToken, owner.Operation, runtime);
+            IReadOnlyList<ExecutionLock> ownerLocks = owner.GetExecutionScopeLocks(parameterContext);
+            if (ownerLocks.Count == 0)
+            {
+                continue;
+            }
+
+            if (HasReservationBehavior(bodyStatusOnGrant))
+            {
+                foreach (ExecutionLock executionLock in ownerLocks)
+                {
+                    reservationKeys.Add(executionLock.Key);
+                }
+            }
+            else if (reservationKeys.Count > 0)
+            {
+                EnsureLockClosureCovered(ownerLocks.Select(executionLock => executionLock.Key), reservationKeys);
+            }
+
+            pendingScopes.Add(new PendingExecutionLockScope(owner, ownerLocks, bodyStatusOnGrant));
         }
 
         return pendingScopes;
     }
 
     /// <summary>
-    /// Returns the ancestor-to-descendant task chain whose lock declarations can protect the supplied executable body.
-    /// The executable task itself is included so body-only locks use the same task-scope mechanism as container locks.
+    /// Returns the ancestor-to-descendant task chain whose lock declarations can reserve the supplied executable body.
+    /// The executable task itself is included so body locks and container reservations use one admission path.
     /// </summary>
     private static IReadOnlyList<ExecutionTask> GetExecutionLockOwners(ExecutionTask executingTask)
     {
@@ -400,8 +425,129 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Releases a task-scope lock once the owning task has reached a terminal or doomed state and no active descendant
-    /// body is still unwinding inside that scope.
+    /// Returns the owner ancestry in root-to-owner order so the global lock table can identify descendant claimants.
+    /// </summary>
+    private static IReadOnlyList<ExecutionTaskId> GetOwnerAncestry(ExecutionTask owner)
+    {
+        return GetExecutionLockOwners(owner)
+            .Select(task => task.Id)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns the body status a newly granted scope will have when the scheduler admits the next executable task.
+    /// </summary>
+    private static ExecutionTaskBodyStatus GetBodyStatusForLockAdmission(ExecutionTask owner, ExecutionTask executingTask)
+    {
+        if (owner.Id == executingTask.Id && owner.HasAuthoredBody)
+        {
+            return ExecutionTaskBodyStatus.Executing;
+        }
+
+        return owner.BodyStatus;
+    }
+
+    /// <summary>
+    /// Returns whether a body status makes declared locks block outsiders while allowing descendant active claims.
+    /// </summary>
+    private static bool HasReservationBehavior(ExecutionTaskBodyStatus bodyStatus)
+    {
+        return bodyStatus is ExecutionTaskBodyStatus.None or ExecutionTaskBodyStatus.WaitingForChild;
+    }
+
+    /// <summary>
+    /// Formats the lock behavior that follows from a task body status for concise task logs.
+    /// </summary>
+    private static string DescribeLockBehavior(ExecutionTaskBodyStatus bodyStatus)
+    {
+        return HasReservationBehavior(bodyStatus) ? "execution lock reservation(s)" : "active execution lock(s)";
+    }
+
+    /// <summary>
+    /// Validates inserted child work before the owning task enters its task-owned child-wait lifecycle.
+    /// </summary>
+    internal void ValidateInsertedChildLockClosure(ExecutionTaskContext parentContext, ChildTaskMergeResult mergeResult)
+    {
+        if (parentContext == null)
+        {
+            throw new ArgumentNullException(nameof(parentContext));
+        }
+
+        if (mergeResult == null)
+        {
+            throw new ArgumentNullException(nameof(mergeResult));
+        }
+
+        IReadOnlyList<string> childLockClosure = ResolveChildLockClosure(mergeResult.Descendants);
+        ValidateChildWaitLockClosure(parentContext.TaskId, childLockClosure);
+    }
+
+    /// <summary>
+    /// Resolves every lock key that inserted child tasks may need before any of those tasks can enter lock wait.
+    /// </summary>
+    private IReadOnlyList<string> ResolveChildLockClosure(IReadOnlyList<ExecutionTask> insertedTasks)
+    {
+        ExecutionTaskRuntimeServices runtime = new(_session, this, CreateTaskLogger);
+        HashSet<string> closureKeys = new(StringComparer.Ordinal);
+        foreach (ExecutionTask task in insertedTasks)
+        {
+            ExecutionParameterContext parameterContext = new(task.Id, task.Title, CreateTaskLogger(task.Id), _executionCancellationToken, task.Operation, runtime);
+            foreach (ExecutionLock executionLock in task.GetExecutionScopeLocks(parameterContext))
+            {
+                closureKeys.Add(executionLock.Key);
+            }
+        }
+
+        return closureKeys.OrderBy(key => key, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Verifies that a running parent's declared reservation set covers the inserted child lock closure.
+    /// </summary>
+    private void ValidateChildWaitLockClosure(ExecutionTaskId parentTaskId, IReadOnlyList<string> childLockClosure)
+    {
+        ExecutionTask parentTask = _session.GetTask(parentTaskId);
+        if (!parentTask.HasAuthoredBody)
+        {
+            return;
+        }
+
+        if (_activeExecutionLockScopes.TryGetValue(parentTaskId, out ActiveExecutionLockScope? parentScope) && parentScope.Keys.Count > 0)
+        {
+            HashSet<string> coveredKeys = new(parentScope.Keys, StringComparer.Ordinal);
+            for (ExecutionTask? ancestor = parentTask.Parent; ancestor != null; ancestor = ancestor.Parent)
+            {
+                if (_activeExecutionLockScopes.TryGetValue(ancestor.Id, out ActiveExecutionLockScope? ancestorScope) && HasReservationBehavior(ancestor.BodyStatus))
+                {
+                    foreach (string key in ancestorScope.Keys)
+                    {
+                        coveredKeys.Add(key);
+                    }
+                }
+            }
+
+            EnsureLockClosureCovered(childLockClosure, coveredKeys);
+        }
+    }
+
+    /// <summary>
+    /// Fails fast when child work can need a lock key that is not covered by the active transaction reservation set.
+    /// </summary>
+    private static void EnsureLockClosureCovered(IEnumerable<string> childLockClosure, ISet<string> coveredKeys)
+    {
+        List<string> missingKeys = childLockClosure
+            .Where(key => !coveredKeys.Contains(key))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToList();
+        if (missingKeys.Count > 0)
+        {
+            throw new InvalidOperationException($"Incomplete child execution-lock closure. Parent task must declare child lock key(s): {string.Join(", ", missingKeys)}.");
+        }
+    }
+
+    /// <summary>
+    /// Releases a task-scope lock when the owner body or bodyless subtree reaches the lifecycle boundary for that claim.
     /// </summary>
     private void ReleaseExecutionLockScopeIfComplete(ExecutionTaskId taskId)
     {
@@ -410,7 +556,15 @@ public sealed class ExecutionPlanScheduler
             return;
         }
 
-        if (_session.GetTask(taskId).HasActiveExecutionInSubtree)
+        ExecutionTask ownerTask = _session.GetTask(taskId);
+        if (ownerTask.HasAuthoredBody)
+        {
+            if (ownerTask.BodyStatus != ExecutionTaskBodyStatus.NotExecuting)
+            {
+                return;
+            }
+        }
+        else if (ownerTask.HasActiveExecutionInSubtree)
         {
             return;
         }
@@ -648,11 +802,10 @@ public sealed class ExecutionPlanScheduler
     /// <summary>
     /// Carries one not-yet-acquired task-scope lock declaration together with the task that owns the eventual release.
     /// </summary>
-    private sealed record PendingExecutionLockScope(ExecutionTask Owner, IReadOnlyList<ExecutionLock> Locks);
+    private sealed record PendingExecutionLockScope(ExecutionTask Owner, IReadOnlyList<ExecutionLock> Locks, ExecutionTaskBodyStatus BodyStatusOnGrant);
 
     /// <summary>
-    /// Tracks one granted task-scope lock so descendant duplicate declarations can see which keys are already protected
-    /// and the scheduler can release the exact grant when the owning task scope closes.
+    /// Tracks one granted task-scope lock so the scheduler can release the exact grant at the owner lifecycle boundary.
     /// </summary>
     private sealed record ActiveExecutionLockScope(IReadOnlyList<string> Keys, IAsyncDisposable Handle);
 
@@ -661,7 +814,7 @@ public sealed class ExecutionPlanScheduler
         int OriginalIndex,
         int DownstreamWorkCount);
 
-    private sealed class LoggedExecutionLockHandle(IAsyncDisposable inner, ILogger logger, string summary) : IAsyncDisposable
+    private sealed class LoggedExecutionLockHandle(IAsyncDisposable inner, ILogger logger, string summary, string modeName) : IAsyncDisposable
     {
         /// <summary>
         /// Releases the global execution-lock grant and records the matching release event in the owning task log.
@@ -669,7 +822,7 @@ public sealed class ExecutionPlanScheduler
         public async ValueTask DisposeAsync()
         {
             await inner.DisposeAsync().ConfigureAwait(false);
-            logger.LogInformation("Released execution lock(s): {ExecutionLocks}", summary);
+            logger.LogInformation("Released {ExecutionLockMode}: {ExecutionLocks}", modeName, summary);
         }
     }
 
