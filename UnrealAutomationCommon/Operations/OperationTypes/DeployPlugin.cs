@@ -136,7 +136,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             public global::LocalAutomation.Runtime.Workspace BlueprintDemoVariantWorkspace { get; }
 
             /// <summary>
-            /// Gets the persistent BuildPlugin-style host project root used for distributable plugin packaging.
+            /// Gets the persistent host project root used as the UAT BuildPlugin input for distributable plugin packaging.
             /// </summary>
             public global::LocalAutomation.Runtime.Workspace DistributablePluginPackageWorkspace { get; }
 
@@ -390,13 +390,13 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             root.Children(global::LocalAutomation.Runtime.ExecutionChildMode.Parallel, steps =>
             {
                 /* Workspace preparation stands on its own because later project-variant materialization only needs the
-                   workspace copy, while plugin packaging owns every plugin-specific staging, build, and archive step that
-                   fans out from that workspace. */
+                   workspace copy, while plugin packaging owns every plugin-specific staging, UAT package, and archive step
+                   that fans out from that workspace. */
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder prepareWorkspace = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder stagePlugin = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder pluginArtifactsFlow = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder strictIncludeValidation = default!;
-                global::LocalAutomation.Runtime.ExecutionTaskBuilder packageDistributablePluginArtifact = default!;
+                global::LocalAutomation.Runtime.ExecutionTaskBuilder packagePluginArtifact = default!;
                 PluginBuildOptions pluginBuildOptions = operationParameters.GetOptions<PluginBuildOptions>();
                 prepareWorkspace = steps.Task("Prepare Workspace")
                     .Describe("Create the isolated engine-specific workspace from the prepared source")
@@ -409,7 +409,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 pluginArtifactsFlow.Children(global::LocalAutomation.Runtime.ExecutionChildMode.Parallel, pluginArtifactScope =>
                 {
                     stagePlugin = pluginArtifactScope.Task("Stage Plugin")
-                        .Describe("Create the staged plugin copy and persistent BuildPlugin package input used for packaging and archiving")
+                        .Describe("Create the staged plugin copy and persistent UAT BuildPlugin package input used for packaging and archiving")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.DistributablePluginPackageWorkspace.MutationLocks)
                         .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
                         .Run(StagingStepAsync);
@@ -422,9 +422,9 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
 
                     strictIncludeValidation = pluginArtifactScope.AddChildOperation(
                             "Validate Strict Includes",
-                            new PackageDistributablePlugin(),
+                            new PackagePlugin(),
                             () => CreatePluginPackageAuthoringParameters(operationParameters, strictIncludes: true),
-                            "Run strict include validation against the staged package input without feeding distributable archives",
+                            "Run UAT BuildPlugin strict include validation against the staged package input without feeding distributable archives",
                             context =>
                             {
                                 DeploymentWorkspaceState state = context.GetData<DeploymentWorkspaceState>();
@@ -442,10 +442,11 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                         .When(pluginBuildOptions.StrictIncludes, "Strict Includes is off.")
                         .After(stagePlugin.Id, removeExistingEnginePluginInstall.Id)
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.DistributablePluginPackageWorkspace.MutationLocks
+                            .Append(UnrealExecutionLocks.GetAutomationToolLock(context.GetData<DeploymentWorkspaceState>().Engine))
                             .Append(UnrealExecutionLocks.GlobalBuild));
 
-                    packageDistributablePluginArtifact = pluginArtifactScope.AddChildOperation(
-                            new PackageDistributablePlugin(),
+                    packagePluginArtifact = pluginArtifactScope.AddChildOperation(
+                            new PackagePlugin(),
                             () => CreatePluginPackageAuthoringParameters(operationParameters, strictIncludes: false),
                             context =>
                             {
@@ -463,6 +464,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                             })
                         .After(stagePlugin.Id, removeExistingEnginePluginInstall.Id)
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.DistributablePluginPackageWorkspace.MutationLocks
+                            .Append(UnrealExecutionLocks.GetAutomationToolLock(context.GetData<DeploymentWorkspaceState>().Engine))
                             .Append(UnrealExecutionLocks.GlobalBuild));
 
                     pluginArtifactScope.Task("Archive Staged Plugin Source")
@@ -473,7 +475,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
 
                     pluginArtifactScope.Task("Archive Distributable Plugin")
                         .Describe("Archive the packaged distributable plugin payload as soon as the built plugin output is ready")
-                        .After(packageDistributablePluginArtifact.Id)
+                        .After(packagePluginArtifact.Id)
                         .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
                         .Run(ArchivePluginBuildAsync);
                 });
@@ -495,7 +497,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                             installProjectPluginBase = sharedBaseScope.Task("Install Distributable Plugin Into Project-Plugin Base")
                                     .Describe("Copy the built distributable plugin into the shared project-plugin base before downstream package variants clone it")
                                     .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks)
-                                    .After(materializeProjectPluginBase.Id, packageDistributablePluginArtifact.Id)
+                                    .After(materializeProjectPluginBase.Id, packagePluginArtifact.Id)
                                     .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
                                     .Run(InstallDistributablePluginIntoProjectPluginBaseAsync);
 
