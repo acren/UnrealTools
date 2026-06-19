@@ -102,11 +102,13 @@ public sealed class ExecutionPlanBuilder
     }
 
     /// <summary>
-    /// Updates whether one authored task participates in the plan and records the disabled reason when it does not.
+    /// Updates one task's own authored condition and then recomputes effective participation for that full authored
+    /// subtree so disabled parent scopes cascade through existing descendants.
     /// </summary>
     internal void SetCondition(ExecutionTask task, bool enabled, string? disabledReason)
     {
-        task.SetCondition(enabled, disabledReason);
+        task.SetLocalCondition(enabled, disabledReason);
+        RefreshEffectiveConditionSubtree(task.Id);
     }
 
     /// <summary>
@@ -302,6 +304,9 @@ public sealed class ExecutionPlanBuilder
             AddImportedDefinition(childTask);
         }
 
+        // Imported child-operation tasks inherit the effective condition of the parent they were attached beneath.
+        RefreshEffectiveConditionSubtree(insertedTasks.RootTaskId);
+
         ExecutionTask importedRootTask = GetDefinition(insertedTasks.RootTaskId);
         if (createRuntimeParameters != null)
         {
@@ -324,6 +329,8 @@ public sealed class ExecutionPlanBuilder
 
         ExecutionTask task = CreateItem(GenerateTaskId(), title, description, parentId);
         AddTaskDefinition(task);
+        // Later-authored child tasks inherit any disabled ancestor condition before the builder returns them.
+        RefreshEffectiveConditionSubtree(task.Id);
         WireDependencies(task, dependencyFrontier);
         return new ExecutionTaskBuilder(this, task, parentId, lastTaskIds);
     }
@@ -393,6 +400,8 @@ public sealed class ExecutionPlanBuilder
             Description: description ?? string.Empty,
             ParentId: parentId,
             Dependencies: Array.Empty<ExecutionTaskId>(),
+            LocallyEnabled: true,
+            LocalDisabledReason: string.Empty,
             Enabled: true,
             DisabledReason: string.Empty,
             DeclaredOptionTypes: _declaredOptionTypes,
@@ -493,6 +502,46 @@ public sealed class ExecutionPlanBuilder
     {
         _items.Add(task);
         _parentStateByTaskId.Add(task.Id, new ParentBuildState());
+    }
+
+    /// <summary>
+    /// Recomputes one authored subtree's effective enabled state by combining each task's own local condition with the
+    /// nearest ancestor condition above it.
+    /// </summary>
+    private void RefreshEffectiveConditionSubtree(ExecutionTaskId rootTaskId)
+    {
+        ExecutionTask task = GetDefinition(rootTaskId);
+        ExecutionTask? parentTask = task.ParentId is ExecutionTaskId parentId ? GetDefinition(parentId) : null;
+        RefreshEffectiveConditionSubtree(task, parentTask);
+    }
+
+    /// <summary>
+    /// Applies the effective condition for one authored task, then walks direct children so parent-scoped conditions also
+    /// govern later-authored descendants and imported child-operation subtrees.
+    /// </summary>
+    private void RefreshEffectiveConditionSubtree(ExecutionTask task, ExecutionTask? parentTask)
+    {
+        if (parentTask != null && !parentTask.Enabled)
+        {
+            task.ApplyEffectiveCondition(false, parentTask.DisabledReason);
+        }
+        else
+        {
+            task.ApplyEffectiveCondition(task.LocallyEnabled, task.LocalDisabledReason);
+        }
+
+        foreach (ExecutionTask child in GetDirectChildren(task.Id))
+        {
+            RefreshEffectiveConditionSubtree(child, task);
+        }
+    }
+
+    /// <summary>
+    /// Returns the direct authored children beneath one builder-owned task definition.
+    /// </summary>
+    private IReadOnlyList<ExecutionTask> GetDirectChildren(ExecutionTaskId parentTaskId)
+    {
+        return _items.Where(item => item.ParentId == parentTaskId).ToList();
     }
 
     /// <summary>

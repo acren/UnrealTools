@@ -255,4 +255,89 @@ public sealed class ExecutionTaskLifecycleInvariantTests
         OperationResult result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ExecutionTaskOutcome.Completed, result.Outcome);
     }
+
+    /// <summary>
+    /// Confirms that a parent disabled with When(false, ...) keeps later-authored children terminal and disabled even
+    /// while an external dependency changes state during execution.
+    /// </summary>
+    [Fact]
+    public async Task DisabledParentScopeKeepsLaterAuthoredChildrenTerminalAcrossDependencyChanges()
+    {
+        /* Hold one unrelated task open so a disabled child can observe real dependency state changes without any work in
+           the disabled subtree becoming runnable. */
+        TaskCompletionSource<bool> releaseBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ExecutionTaskId blockerTaskId = default;
+        ExecutionTaskId disabledParentTaskId = default;
+        ExecutionTaskId immediateChildTaskId = default;
+        ExecutionTaskId dependencyChildTaskId = default;
+
+        /* Author the child scope only after When(false, ...) so the test covers the exact subtree-cascade contract that
+           previously allowed a disabled parent to retain enabled descendants. */
+        Operation operation = new RuntimeTestUtilities.InlineOperation(root =>
+        {
+            root.Children(ExecutionChildMode.Parallel, scope =>
+            {
+                ExecutionTaskBuilder blocker = scope.Task("Blocker");
+                blockerTaskId = blocker.Id;
+                blocker.Run(async _ =>
+                {
+                    await releaseBlocker.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    return OperationResult.Succeeded();
+                });
+
+                scope.Task("Disabled Parent Scope", out disabledParentTaskId)
+                    .When(false, "Disabled parent scope.")
+                    .Children(childScope =>
+                    {
+                        childScope.Task("Immediate Disabled Child")
+                            .Run(() => Task.CompletedTask, out immediateChildTaskId);
+
+                        childScope.Task("Dependency Disabled Child")
+                            .After(blockerTaskId)
+                            .Run(() => Task.CompletedTask, out dependencyChildTaskId);
+                    });
+            });
+        });
+
+        /* Build the live runtime before execution starts so the test can assert the terminal disabled contract at
+           session initialization time, not only after the scheduler begins observing dependency changes. */
+        (ExecutionPlan _, ExecutionSession session, ExecutionPlanScheduler scheduler) = RuntimeTestUtilities.CreateRuntime(operation);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(disabledParentTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(disabledParentTaskId).Outcome);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(immediateChildTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(immediateChildTaskId).Outcome);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(dependencyChildTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(dependencyChildTaskId).Outcome);
+
+        /* Start the real scheduler, then wait until the unrelated blocker is actively running. The disabled dependency
+           child must remain terminal throughout that external state transition. */
+        Task<OperationResult> executeTask = scheduler.ExecuteAsync(CancellationToken.None);
+        try
+        {
+            await session.GetTask(blockerTaskId).WaitForStartAsync().WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.Equal(ExecutionTaskState.Completed, session.GetTask(disabledParentTaskId).State);
+            Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(disabledParentTaskId).Outcome);
+            Assert.Equal(ExecutionTaskState.Completed, session.GetTask(immediateChildTaskId).State);
+            Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(immediateChildTaskId).Outcome);
+            Assert.Equal(ExecutionTaskState.Completed, session.GetTask(dependencyChildTaskId).State);
+            Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(dependencyChildTaskId).Outcome);
+        }
+        finally
+        {
+            /* Always release the unrelated blocker so a failing assertion does not strand the background scheduler run. */
+            releaseBlocker.TrySetResult(true);
+        }
+
+        /* Once the blocker completes, the disabled subtree should stay terminal and the overall run should still finish
+           successfully without any completed-to-running transition attempt. */
+        OperationResult result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ExecutionTaskOutcome.Completed, result.Outcome);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(disabledParentTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(disabledParentTaskId).Outcome);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(immediateChildTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(immediateChildTaskId).Outcome);
+        Assert.Equal(ExecutionTaskState.Completed, session.GetTask(dependencyChildTaskId).State);
+        Assert.Equal(ExecutionTaskOutcome.Disabled, session.GetTask(dependencyChildTaskId).Outcome);
+    }
 }

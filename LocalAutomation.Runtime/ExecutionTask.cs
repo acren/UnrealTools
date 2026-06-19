@@ -58,6 +58,8 @@ internal record TaskSpec(
     string Description,
     ExecutionTaskId? ParentId,
     IReadOnlyList<ExecutionTaskId> Dependencies,
+    bool LocallyEnabled,
+    string LocalDisabledReason,
     bool Enabled,
     string DisabledReason,
     IReadOnlyList<Type> DeclaredOptionTypes,
@@ -193,6 +195,12 @@ public class ExecutionTask : INotifyPropertyChanged
     public bool Enabled => _spec.Enabled;
 
     public string DisabledReason => _spec.DisabledReason;
+
+    // Stores the task's own authored condition before any disabled ancestor folds into the effective subtree state.
+    internal bool LocallyEnabled => _spec.LocallyEnabled;
+
+    // Carries the task's own authored disabled reason so ancestor condition changes can recompute the effective reason.
+    internal string LocalDisabledReason => _spec.LocalDisabledReason;
 
     public IReadOnlyList<Type> DeclaredOptionTypes => _spec.DeclaredOptionTypes;
 
@@ -484,6 +492,12 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     internal TaskStartState GetTaskStartState()
     {
+        ValidateDisabledSubtreeInvariant();
+        if (!Enabled)
+        {
+            return TaskStartState.NoStartableWork;
+        }
+
         TaskStartState subtreeStartState = GetOwnWorkStartStateIgnoringAncestors();
         foreach (ExecutionTask child in _children)
         {
@@ -500,7 +514,8 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     internal IReadOnlyList<ExecutionTask> GetSchedulerReadyBranchRoots()
     {
-        if (State == ExecutionTaskState.Completed)
+        ValidateDisabledSubtreeInvariant();
+        if (!Enabled || State == ExecutionTaskState.Completed)
         {
             return Array.Empty<ExecutionTask>();
         }
@@ -609,6 +624,11 @@ public class ExecutionTask : INotifyPropertyChanged
             return;
         }
 
+        if (!Enabled && child.Enabled)
+        {
+            throw CreateEnabledDescendantUnderDisabledParentException(child);
+        }
+
         _children.Add(child);
         child._parent = this;
         // Parents observe child state transitions so child lifecycle changes roll up immediately.
@@ -650,6 +670,7 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     internal void RefreshDerivedStateFromObservations()
     {
+        ValidateDisabledSubtreeInvariant();
         (ExecutionTaskState state, ExecutionTaskOutcome? outcome) = ComputeRolledUpStateFromChildren();
         TransitionStatus(state, outcome);
     }
@@ -889,14 +910,28 @@ public class ExecutionTask : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Updates whether the task participates in the authored plan and the user-facing reason when it does not.
+    /// Updates this task's own authored condition without yet folding in any disabled ancestor state.
     /// </summary>
-    internal void SetCondition(bool enabled, string? disabledReason)
+    internal void SetLocalCondition(bool enabled, string? disabledReason)
     {
+        string normalizedDisabledReason = enabled ? string.Empty : (disabledReason ?? string.Empty);
+        _spec = _spec with
+        {
+            LocallyEnabled = enabled,
+            LocalDisabledReason = normalizedDisabledReason
+        };
+    }
+
+    /// <summary>
+    /// Applies the effective authored participation state after local and ancestor conditions have been combined.
+    /// </summary>
+    internal void ApplyEffectiveCondition(bool enabled, string? disabledReason)
+    {
+        string normalizedDisabledReason = enabled ? string.Empty : (disabledReason ?? string.Empty);
         _spec = _spec with
         {
             Enabled = enabled,
-            DisabledReason = enabled ? string.Empty : (disabledReason ?? string.Empty)
+            DisabledReason = normalizedDisabledReason
         };
     }
 
@@ -1202,7 +1237,7 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     private TaskStartState GetOwnWorkStartStateIgnoringAncestors()
     {
-        if (_spec.ExecuteAsync == null || State == ExecutionTaskState.Completed)
+        if (!Enabled || _spec.ExecuteAsync == null || State == ExecutionTaskState.Completed)
         {
             return TaskStartState.NoStartableWork;
         }
@@ -1233,7 +1268,7 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     private TaskStartState GetReachableTaskStartStateForParentRollup()
     {
-        if (State == ExecutionTaskState.Completed || Outcome != null)
+        if (!Enabled || State == ExecutionTaskState.Completed || Outcome != null)
         {
             return TaskStartState.NoStartableWork;
         }
@@ -1263,7 +1298,8 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     private bool IsScopeOpenForDescendantWork()
     {
-        return State != ExecutionTaskState.Completed
+        return Enabled
+            && State != ExecutionTaskState.Completed
             && Outcome == null
             && AreDependenciesSatisfied()
             && AreAncestorsOpen();
@@ -1327,6 +1363,15 @@ public class ExecutionTask : INotifyPropertyChanged
     /// </summary>
     internal (ExecutionTaskState state, ExecutionTaskOutcome? outcome) ComputeRolledUpStateFromChildren()
     {
+        ValidateDisabledSubtreeInvariant();
+        if (!Enabled)
+        {
+            /* Disabled tasks keep one terminal semantic projection regardless of observed child or dependency changes.
+               Rollup must pin both lifecycle and outcome here so observer refresh cannot reinterpret disabled work as an
+               ordinary successful completion. */
+            return (ExecutionTaskState.Completed, ExecutionTaskOutcome.Disabled);
+        }
+
         TaskStartState ownStartState = GetOwnWorkStartStateIgnoringAncestors();
         TaskStartState subtreeStartState = ownStartState;
         bool ownTaskIsWaitingForExecutionLock = ownStartState == TaskStartState.AwaitingLock;
@@ -1681,10 +1726,44 @@ public class ExecutionTask : INotifyPropertyChanged
     private bool HasStartedSubtree => HasStarted || _children.Any(child => child.HasStarted);
 
     /// <summary>
+    /// Rejects any live graph shape where a disabled parent scope still carries enabled descendant work.
+    /// </summary>
+    internal void ValidateDisabledSubtreeInvariant()
+    {
+        if (Enabled)
+        {
+            return;
+        }
+
+        ExecutionTask? enabledChild = _children.FirstOrDefault(child => child.Enabled);
+        if (enabledChild != null)
+        {
+            throw CreateEnabledDescendantUnderDisabledParentException(enabledChild);
+        }
+    }
+
+    /// <summary>
+    /// Creates the invariant violation used when a disabled parent scope is asked to contain enabled descendant work.
+    /// </summary>
+    private InvalidOperationException CreateEnabledDescendantUnderDisabledParentException(ExecutionTask enabledChild)
+    {
+        return new InvalidOperationException($"Disabled task '{Title}' cannot contain enabled descendant '{enabledChild.Title}'.");
+    }
+
+    /// <summary>
     /// Guards combined observable state so lifecycle and semantic outcome never describe contradictory execution states.
     /// </summary>
     internal void ValidateObservedState(ExecutionTaskState state, ExecutionTaskOutcome? outcome)
     {
+        if (!Enabled)
+        {
+            ValidateDisabledSubtreeInvariant();
+            if (state != ExecutionTaskState.Completed || outcome != ExecutionTaskOutcome.Disabled)
+            {
+                throw new InvalidOperationException($"Disabled task '{Title}' must remain completed with disabled outcome.");
+            }
+        }
+
         if (state > ExecutionTaskState.Queued
             && state < ExecutionTaskState.Completed
             && outcome is (ExecutionTaskOutcome.Completed or ExecutionTaskOutcome.Skipped or ExecutionTaskOutcome.Disabled))

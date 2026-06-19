@@ -1683,7 +1683,8 @@ public sealed class ExecutionSession
         if (task.ParentId is ExecutionTaskId parentId)
         {
             /* Wire the parent-child object reference. GetTask walks the existing tree to find the parent, then
-               AddChild sets the child's _parent back-reference and adds it to the parent's _children list. */
+               AddChild sets the child's _parent back-reference, rejects enabled descendants under disabled parents,
+               and adds it to the parent's _children list. */
             GetTask(parentId).AddChild(task);
         }
         else
@@ -1702,11 +1703,14 @@ public sealed class ExecutionSession
     /// <summary>
     /// Wires task-local dependency observation for an already attached task set. Tasks observe their direct dependencies
     /// so dependency-driven frontier changes can recompute only the affected tasks instead of requiring a global sweep.
+    /// Disabled parent scopes are validated here before any dependency observation can keep a contradictory live subtree
+    /// attached to the session graph.
     /// </summary>
     private void WireObservedDependencies(IEnumerable<ExecutionTask> tasks)
     {
         foreach (ExecutionTask task in tasks)
         {
+            task.ValidateDisabledSubtreeInvariant();
             foreach (ExecutionTaskId dependencyId in task.Dependencies)
             {
                 task.ObserveDependency(GetTaskCore(dependencyId));

@@ -90,7 +90,8 @@ public sealed class ExecutionTaskBuilder : ExecutionNodeBuilderBase<ExecutionTas
     }
 
     /// <summary>
-    /// Marks whether the task should participate in the current plan build.
+    /// Marks whether this task participates in the current plan build. When applied to a parent scope, the same
+    /// condition also governs every authored descendant beneath that task.
     /// </summary>
     public ExecutionTaskBuilder When(bool enabled, string? disabledReason = null)
     {
