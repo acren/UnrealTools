@@ -746,4 +746,228 @@ public sealed class ExecutionPlanSchedulingPriorityTests
             await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
+
+    /// <summary>
+    /// Confirms that lock priority counts unfinished descendant work inside a downstream parent scope after that scope is
+    /// reached, rather than counting only the parent scope node itself.
+    /// </summary>
+    [Fact]
+    public async Task LockReleaseCountsDescendantWorkInsideDownstreamParentScope()
+    {
+        // Hold the shared lock until both contenders are waiting so release chooses only by downstream-priority scoring.
+        ExecutionLock sharedLock = new("downstream-subtree-priority-lock");
+        TaskCompletionSource<bool> lockHolderStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> releaseLockHolder = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> allowLaterBranch = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<ExecutionTaskId> lockWinner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> releaseWinner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ExecutionTaskId olderPackageTaskId = default;
+        ExecutionTaskId laterBuildTaskId = default;
+
+        Operation operation = new RuntimeTestUtilities.InlineOperation(root =>
+        {
+            root.Children(ExecutionChildMode.Parallel, scope =>
+            {
+                scope.Task("Lock Holder")
+                    .WithExecutionLocks(sharedLock)
+                    .Run(RuntimeTestUtilities.RunUntilReleased(lockHolderStarted, releaseLockHolder));
+
+                ExecutionTaskBuilder contenderGate = scope.Task("Open Contenders")
+                    .Run(async _ => await lockHolderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                scope.Task("Older Branch")
+                    .After(contenderGate.Id)
+                    .Children(branch =>
+                    {
+                        ExecutionTaskBuilder olderPackage = branch.Task("Older Package")
+                            .WithExecutionLocks(sharedLock)
+                            .Run(async context =>
+                            {
+                                lockWinner.TrySetResult(context.TaskId);
+                                await releaseWinner.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                            }, out olderPackageTaskId);
+
+                        ExecutionTaskBuilder downstreamParent = branch.Task("Older Downstream Parent")
+                            .After(olderPackage.Id);
+                        downstreamParent.Children(descendants =>
+                        {
+                            descendants.Task("Descendant 1").Run(() => Task.CompletedTask);
+                        });
+                    });
+
+                scope.Task("Later Branch")
+                    .After(contenderGate.Id)
+                    .Children(branch =>
+                    {
+                        ExecutionTaskBuilder delay = branch.Task("Delay Later Branch")
+                            .Run(async _ => await allowLaterBranch.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                        ExecutionTaskBuilder laterBuild = branch.Task("Later Build")
+                            .After(delay.Id)
+                            .WithExecutionLocks(sharedLock)
+                            .Run(async context =>
+                            {
+                                lockWinner.TrySetResult(context.TaskId);
+                                await releaseWinner.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                            }, out laterBuildTaskId);
+
+                        laterBuild.Then("Later Follow-up 1").Run(() => Task.CompletedTask)
+                            .Then("Later Follow-up 2").Run(() => Task.CompletedTask);
+                    });
+            });
+        });
+
+        (ExecutionPlan _, ExecutionSession session, ExecutionPlanScheduler scheduler) = RuntimeTestUtilities.CreateRuntime(operation);
+        Task<OperationResult> executeTask = scheduler.ExecuteAsync(CancellationToken.None);
+        ExecutionTaskId winnerTaskId = default;
+        try
+        {
+            await RuntimeTestUtilities.WaitForConditionAsync(
+                () => olderPackageTaskId != default
+                    && session.Tasks.Any(task => task.Id == olderPackageTaskId)
+                    && session.GetTask(olderPackageTaskId).State == ExecutionTaskState.WaitingForExecutionLock,
+                TimeSpan.FromSeconds(5),
+                "Timed out waiting for the older contender to wait for the shared lock.");
+
+            allowLaterBranch.TrySetResult(true);
+            await RuntimeTestUtilities.WaitForConditionAsync(
+                () => laterBuildTaskId != default
+                    && session.Tasks.Any(task => task.Id == laterBuildTaskId)
+                    && session.GetTask(laterBuildTaskId).State == ExecutionTaskState.WaitingForExecutionLock,
+                TimeSpan.FromSeconds(5),
+                "Timed out waiting for the later contender to wait for the shared lock.");
+
+            releaseLockHolder.TrySetResult(true);
+            winnerTaskId = await lockWinner.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            allowLaterBranch.TrySetResult(true);
+            releaseLockHolder.TrySetResult(true);
+            releaseWinner.TrySetResult(true);
+            await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        // The older contender should win because its downstream parent scope contains more unfinished descendant work.
+        Assert.Equal(olderPackageTaskId, winnerTaskId);
+    }
+
+    /// <summary>
+    /// Confirms that when an earlier same-lock sibling only keeps its own branch alive, a later sibling that completes a
+    /// downstream parent scope and unlocks external fanout should still win the lock once both contenders are waiting.
+    /// </summary>
+    [Fact]
+    public async Task LockReleasePrefersSiblingContenderThatUnlocksExternalDownstreamWork()
+    {
+        // Hold the shared lock until both contenders are waiting so release has to choose directly between FIFO and downstream priority.
+        ExecutionLock sharedLock = new("shared-ancestor-sibling-priority-lock");
+        TaskCompletionSource<bool> lockHolderStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> releaseLockHolder = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> allowLaterBranch = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<ExecutionTaskId> lockWinner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> releaseWinner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ExecutionTaskId earlierSiblingTaskId = default;
+        ExecutionTaskId downstreamUnlockingSiblingTaskId = default;
+
+        Operation operation = new RuntimeTestUtilities.InlineOperation(root =>
+        {
+            root.Children(ExecutionChildMode.Parallel, scope =>
+            {
+                scope.Task("Lock Holder")
+                    .WithExecutionLocks(sharedLock)
+                    .Run(RuntimeTestUtilities.RunUntilReleased(lockHolderStarted, releaseLockHolder));
+
+                ExecutionTaskBuilder openSiblingContenders = scope.Task("Open Sibling Contenders")
+                    .Run(async _ => await lockHolderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                scope.Task("Earlier Branch")
+                    .After(openSiblingContenders.Id)
+                    .Children(branch =>
+                    {
+                        ExecutionTaskBuilder earlierDownstreamParent = branch.Task("Earlier Downstream Parent");
+                        earlierDownstreamParent.Children(shared =>
+                        {
+                            // Queue this contender first so a broken tie falls back to FIFO and exposes the shared-ancestor bug.
+                            shared.Task("Earlier Sibling Contender")
+                                .WithExecutionLocks(sharedLock)
+                                .Run(async context =>
+                                {
+                                    lockWinner.TrySetResult(context.TaskId);
+                                    await releaseWinner.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                                }, out earlierSiblingTaskId);
+                        });
+
+                        branch.Task("Earlier Fanout")
+                            .After(earlierDownstreamParent.Id)
+                            .Run(() => Task.CompletedTask);
+                    });
+
+                scope.Task("Later Branch")
+                    .After(openSiblingContenders.Id)
+                    .Children(branch =>
+                    {
+                        ExecutionTaskBuilder delayLaterBranch = branch.Task("Delay Later Branch")
+                            .Run(async _ => await allowLaterBranch.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                        ExecutionTaskBuilder laterDownstreamParent = branch.Task("Later Downstream Parent")
+                            .After(delayLaterBranch.Id);
+                        laterDownstreamParent.Children(shared =>
+                        {
+                            // This contender completes the later parent scope, which should unlock the later branch fanout.
+                            shared.Task("Downstream-Unlocking Sibling Contender")
+                                .WithExecutionLocks(sharedLock)
+                                .Run(async context =>
+                                {
+                                    lockWinner.TrySetResult(context.TaskId);
+                                    await releaseWinner.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                                }, out downstreamUnlockingSiblingTaskId);
+                        });
+
+                        branch.Task("Later Fanout 1")
+                            .After(laterDownstreamParent.Id)
+                            .Run(() => Task.CompletedTask);
+
+                        branch.Task("Later Fanout 2")
+                            .After(laterDownstreamParent.Id)
+                            .Run(() => Task.CompletedTask);
+                    });
+            });
+        });
+
+        (ExecutionPlan _, ExecutionSession session, ExecutionPlanScheduler scheduler) = RuntimeTestUtilities.CreateRuntime(operation);
+        Task<OperationResult> executeTask = scheduler.ExecuteAsync(CancellationToken.None);
+        ExecutionTaskId winnerTaskId = default;
+        OperationResult result;
+        try
+        {
+            await RuntimeTestUtilities.WaitForConditionAsync(
+                () => earlierSiblingTaskId != default
+                    && session.Tasks.Any(task => task.Id == earlierSiblingTaskId)
+                    && session.GetTask(earlierSiblingTaskId).State == ExecutionTaskState.WaitingForExecutionLock,
+                TimeSpan.FromSeconds(5),
+                "Timed out waiting for the earlier sibling contender to wait for the shared lock.");
+
+            allowLaterBranch.TrySetResult(true);
+            await RuntimeTestUtilities.WaitForConditionAsync(
+                () => downstreamUnlockingSiblingTaskId != default
+                    && session.Tasks.Any(task => task.Id == downstreamUnlockingSiblingTaskId)
+                    && session.GetTask(downstreamUnlockingSiblingTaskId).State == ExecutionTaskState.WaitingForExecutionLock,
+                TimeSpan.FromSeconds(5),
+                "Timed out waiting for the downstream-unlocking sibling contender to wait for the shared lock.");
+
+            releaseLockHolder.TrySetResult(true);
+            winnerTaskId = await lockWinner.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            allowLaterBranch.TrySetResult(true);
+            releaseLockHolder.TrySetResult(true);
+            releaseWinner.TrySetResult(true);
+            result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        // The later sibling should win because only it completes the downstream parent scope that opens the external fanout.
+        Assert.Equal(downstreamUnlockingSiblingTaskId, winnerTaskId);
+        Assert.Equal(ExecutionTaskOutcome.Completed, result.Outcome);
+    }
 }

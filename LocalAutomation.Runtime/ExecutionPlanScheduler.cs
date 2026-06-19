@@ -25,6 +25,8 @@ public sealed class ExecutionPlanScheduler
     private readonly ILogger _logger;
     private readonly IExecutionTaskStateSink? _taskStateSink;
     private readonly ExecutionSession _session;
+    // Downstream-work scoring stays separate from orchestration so scheduler ordering and lock admission share one policy module.
+    private readonly DownstreamWorkScorer _downstreamWorkScorer;
     private readonly object _workSignalSyncRoot = new();
     private readonly object _executionCancellationSyncRoot = new();
     // Task-scope locks are held by the task that declared them; behavior comes from the owner's body status.
@@ -46,6 +48,7 @@ public sealed class ExecutionPlanScheduler
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _taskStateSink = logger as IExecutionTaskStateSink;
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        _downstreamWorkScorer = new DownstreamWorkScorer(_session);
     }
 
     /// <summary>
@@ -318,7 +321,7 @@ public sealed class ExecutionPlanScheduler
     /// Acquires every task-scope lock required before the concrete task body starts. One atomic acquisition covers the
     /// owner chain so ancestor reservations and body locks cannot be granted in a deadlocking partial order.
     /// </summary>
-    private bool TryAcquireExecutionLocksForStart(ExecutionTask visibleTask, ExecutionTask executingTask, int priority)
+    private bool TryAcquireExecutionLocksForStart(ExecutionTask visibleTask, ExecutionTask executingTask, DownstreamWorkScore downstreamWork)
     {
         ExecutionTaskRuntimeServices runtime = new(_session, this, CreateTaskLogger);
         IReadOnlyList<PendingExecutionLockScope> pendingScopes = GetPendingExecutionLockScopes(executingTask, runtime);
@@ -327,22 +330,32 @@ public sealed class ExecutionPlanScheduler
             return true;
         }
 
+        int priority = downstreamWork.Count;
+        ILogger executingTaskLogger = CreateTaskLogger(executingTask.Id);
         IReadOnlyList<(ExecutionTask Owner, IReadOnlyList<ExecutionTaskId> OwnerAncestry, ExecutionTaskBodyStatus BodyStatusOnGrant, IReadOnlyList<ExecutionLock> Locks)> lockGroups = pendingScopes
             .Select(scope => (scope.Owner, GetOwnerAncestry(scope.Owner), scope.BodyStatusOnGrant, scope.Locks))
             .ToList();
         if (!ExecutionLocks.TryAcquireOrWait(visibleTask.Id, lockGroups, priority, out IReadOnlyList<IAsyncDisposable> acquiredHandles))
         {
-            MarkTaskWaitingForExecutionLocks(visibleTask, executingTask, pendingScopes.SelectMany(scope => scope.Locks).ToList());
+            LogDownstreamWorkEvidence(executingTaskLogger, visibleTask, executingTask, downstreamWork, granted: false);
+            MarkTaskWaitingForExecutionLocks(visibleTask, executingTask, pendingScopes.SelectMany(scope => scope.Locks).ToList(), priority);
             return false;
         }
 
+        /* Emit one debug-level evidence summary per admission decision so real execution logs can show exactly which
+           downstream tasks produced the computed priority without duplicating that large payload once per owner scope. */
+        LogDownstreamWorkEvidence(executingTaskLogger, visibleTask, executingTask, downstreamWork, granted: true);
         for (int index = 0; index < pendingScopes.Count; index += 1)
         {
             PendingExecutionLockScope pendingScope = pendingScopes[index];
             ILogger taskLogger = CreateTaskLogger(pendingScope.Owner.Id);
             string lockSummary = string.Join(", ", pendingScope.Locks.Select(executionLock => executionLock.Key));
             string modeName = DescribeLockBehavior(pendingScope.BodyStatusOnGrant);
-            taskLogger.LogInformation("Acquired {ExecutionLockMode}: {ExecutionLocks}", modeName, lockSummary);
+            taskLogger.LogInformation(
+                "Acquired {ExecutionLockMode}: {ExecutionLocks} (priority {DownstreamWorkPriority})",
+                modeName,
+                lockSummary,
+                priority);
             _activeExecutionLockScopes.Add(
                 pendingScope.Owner.Id,
                 new ActiveExecutionLockScope(
@@ -648,8 +661,9 @@ public sealed class ExecutionPlanScheduler
                     continue;
                 }
 
-                int priority = CountDownstreamWork(nextStartTask);
-                if (!TryAcquireExecutionLocksForStart(task, nextStartTask, priority))
+                // Lock admission reuses the same downstream-work score as ready-branch ordering.
+                DownstreamWorkScore downstreamWork = _downstreamWorkScorer.Evaluate(nextStartTask);
+                if (!TryAcquireExecutionLocksForStart(task, nextStartTask, downstreamWork))
                 {
                     continue;
                 }
@@ -692,9 +706,10 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Publishes the explicit lock-wait state for a task that is ready but cannot yet receive its global lock grant.
+    /// Publishes the explicit lock-wait state for a task that is ready but cannot yet receive its global lock grant,
+    /// including the current downstream-work score used for lock arbitration.
     /// </summary>
-    private void MarkTaskWaitingForExecutionLocks(ExecutionTask visibleTask, ExecutionTask executingTask, IReadOnlyList<ExecutionLock> executionLocks)
+    private void MarkTaskWaitingForExecutionLocks(ExecutionTask visibleTask, ExecutionTask executingTask, IReadOnlyList<ExecutionLock> executionLocks, int priority)
     {
         if (visibleTask.State == ExecutionTaskState.AwaitingLock)
         {
@@ -703,7 +718,11 @@ public sealed class ExecutionPlanScheduler
 
         ILogger taskLogger = CreateTaskLogger(executingTask.Id);
         string lockSummary = string.Join(", ", executionLocks.Select(executionLock => executionLock.Key));
-        taskLogger.LogDebug("Waiting for execution lock(s) for task '{TaskTitle}': {ExecutionLocks}", executingTask.Title, lockSummary);
+        taskLogger.LogDebug(
+            "Waiting for execution lock(s) for task '{TaskTitle}' (priority {DownstreamWorkPriority}): {ExecutionLocks}",
+            executingTask.Title,
+            priority,
+            lockSummary);
         SetState(visibleTask.Id, ExecutionTaskState.AwaitingLock);
     }
 
@@ -727,10 +746,11 @@ public sealed class ExecutionPlanScheduler
                     return null;
                 }
 
+                // Ready-branch ordering and lock admission use the same scorer so wait/grant policy stays consistent.
                 return new OrderedReadyTask(
                     task,
                     index,
-                    CountDownstreamWork(nextStartTask));
+                    _downstreamWorkScorer.Evaluate(nextStartTask).Count);
             })
             .Where(item => item != null)
             .GroupBy(item => item!.Task.Id)
@@ -742,61 +762,28 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Counts the unfinished tasks that are transitively downstream of the concrete next-running task and each of its
-    /// ancestors. Summing the full ancestor chain keeps nested child-operation work attached to the outer runtime branch
-    /// that will continue unlocking work after the current runnable task completes.
+    /// Logs the exact counted downstream task set only when debug logging is enabled so wait/grant evidence explains the
+    /// scheduler decision while the scorer remains responsible only for producing the score and counted evidence set.
     /// </summary>
-    private int CountDownstreamWork(ExecutionTask task)
+    private void LogDownstreamWorkEvidence(ILogger taskLogger, ExecutionTask visibleTask, ExecutionTask executingTask, DownstreamWorkScore downstreamWork, bool granted)
     {
-        HashSet<ExecutionTaskId> visitedTaskIds = new();
-        ExecutionTask? currentTask = task;
-        while (currentTask != null)
+        if (!taskLogger.IsEnabled(LogLevel.Debug))
         {
-            CollectDownstreamDependentTasks(currentTask.Id, visitedTaskIds);
-            currentTask = currentTask.Parent;
+            return;
         }
 
-        return visitedTaskIds.Count;
-    }
-
-    /// <summary>
-    /// Walks unfinished dependency edges outward from one task id and accumulates every transitively downstream task into
-    /// the provided visited set, including parent scopes that become relevant when descendant completion unlocks their
-    /// own dependents.
-    /// </summary>
-    private void CollectDownstreamDependentTasks(ExecutionTaskId taskId, HashSet<ExecutionTaskId> visitedTaskIds)
-    {
-        Queue<ExecutionTaskId> pendingTaskIds = new();
-        pendingTaskIds.Enqueue(taskId);
-
-        while (pendingTaskIds.Count > 0)
-        {
-            ExecutionTaskId currentTaskId = pendingTaskIds.Dequeue();
-            foreach (ExecutionTask dependentTask in _session.Tasks.Where(candidate => candidate.Outcome == null && candidate.Dependencies.Contains(currentTaskId)))
-            {
-                EnqueueDownstreamTaskAndParentScopes(dependentTask, visitedTaskIds, pendingTaskIds);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Adds one discovered downstream task and each open parent scope above it to the pending traversal queue.
-    /// </summary>
-    private static void EnqueueDownstreamTaskAndParentScopes(
-        ExecutionTask task,
-        HashSet<ExecutionTaskId> visitedTaskIds,
-        Queue<ExecutionTaskId> pendingTaskIds)
-    {
-        /* A descendant can complete a parent scope whose id is the actual prerequisite for later fanout work. Enqueueing
-           each open parent scope lets the priority walk cross that completion boundary without storing extra scheduler
-           state beside the live graph. */
-        for (ExecutionTask? currentTask = task; currentTask != null && currentTask.Outcome == null; currentTask = currentTask.Parent)
-        {
-            if (visitedTaskIds.Add(currentTask.Id))
-            {
-                pendingTaskIds.Enqueue(currentTask.Id);
-            }
-        }
+        IReadOnlyList<ExecutionTask> countedTasks = downstreamWork.CountedTaskIds
+            .Select(taskId => _session.GetTask(taskId))
+            .OrderBy(task => task.Title, StringComparer.Ordinal)
+            .ThenBy(task => task.Id.Value, StringComparer.Ordinal)
+            .ToList();
+        taskLogger.LogDebug(
+            "Execution-lock {Decision} downstream-work evidence. Branch='{VisibleTaskTitle}' Executable='{ExecutingTaskTitle}' Priority={DownstreamWorkPriority} Counted=[{CountedDownstreamTasks}]",
+            granted ? "grant" : "wait",
+            visibleTask.Title,
+            executingTask.Title,
+            downstreamWork.Count,
+            string.Join("; ", countedTasks.Select(task => $"{task.Title} ({task.Id.Value})")));
     }
 
     /// <summary>
