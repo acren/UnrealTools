@@ -49,6 +49,7 @@ public sealed class ApplicationSettingsService
     {
         OutputPaths.SetRoot(Settings.OutputRootPath);
         OutputPaths.SetTempRoot(Settings.TempRootPath);
+        ApplicationLogThresholdSettings.Update(Settings.DisplayMinimumLogLevel, Settings.FileMinimumLogLevel);
     }
 
     /// <summary>

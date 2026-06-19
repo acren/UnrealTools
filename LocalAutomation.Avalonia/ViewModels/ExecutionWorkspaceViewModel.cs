@@ -899,7 +899,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         }
 
         IEnumerable<LogEntry> visibleRawEntries = scopedEntries
-            .Where(entry => MatchesActiveSeverityFilters(runtimeTab, entry));
+            .Where(entry => MatchesActiveLogFilters(runtimeTab, entry));
         List<LogEntryViewModel> visibleEntries = visibleRawEntries
             .Select(CreateLogEntryViewModel)
             .ToList();
@@ -911,10 +911,16 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Returns whether one scoped raw log entry should remain visible under the tab's active WARN and ERR filters.
+    /// Returns whether one scoped raw log entry should remain visible under the global display threshold and the tab's
+    /// active WARN and ERR filters.
     /// </summary>
-    private static bool MatchesActiveSeverityFilters(RuntimeWorkspaceTabViewModel runtimeTab, LogEntry entry)
+    private static bool MatchesActiveLogFilters(RuntimeWorkspaceTabViewModel runtimeTab, LogEntry entry)
     {
+        if (!ApplicationLogThresholdSettings.AllowsDisplay(entry.Verbosity))
+        {
+            return false;
+        }
+
         bool warningFilterActive = runtimeTab.IsWarningLogFilterActive;
         bool errorFilterActive = runtimeTab.IsErrorLogFilterActive;
         if (!warningFilterActive && !errorFilterActive)
@@ -1276,12 +1282,19 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Refreshes all open graph tabs when the global hidden-task reveal preference changes.
+    /// Refreshes all open graph and log tabs when a global display-facing setting changes.
     /// </summary>
     private void HandleApplicationSettingsChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(e.PropertyName) &&
-            !string.Equals(e.PropertyName, nameof(LocalAutomation.Application.ApplicationSettings.RevealHiddenTasks), StringComparison.Ordinal))
+        bool propertyMatches(string propertyName)
+        {
+            return string.Equals(e.PropertyName, propertyName, StringComparison.Ordinal);
+        }
+
+        bool propertyNameSpecified = !string.IsNullOrWhiteSpace(e.PropertyName);
+        bool revealHiddenTasksChanged = !propertyNameSpecified || propertyMatches(nameof(LocalAutomation.Application.ApplicationSettings.RevealHiddenTasks));
+        bool displayLogLevelChanged = !propertyNameSpecified || propertyMatches(nameof(LocalAutomation.Application.ApplicationSettings.DisplayMinimumLogLevel));
+        if (!revealHiddenTasksChanged && !displayLogLevelChanged)
         {
             return;
         }
@@ -1289,8 +1302,12 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         bool revealHiddenTasks = _applicationSettingsService.Settings.RevealHiddenTasks;
         foreach (RuntimeWorkspaceTabViewModel tab in RuntimeTabs)
         {
-            tab.Graph.SetRevealHiddenTasks(revealHiddenTasks);
-            if (tab.ShowsLog)
+            if (revealHiddenTasksChanged)
+            {
+                tab.Graph.SetRevealHiddenTasks(revealHiddenTasks);
+            }
+
+            if (displayLogLevelChanged && tab.ShowsLog)
             {
                 RebuildTabSelectedLogEntries(tab);
             }

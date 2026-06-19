@@ -762,12 +762,12 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Logs the exact counted downstream task set only when debug logging is enabled so wait/grant evidence explains the
-    /// scheduler decision while the scorer remains responsible only for producing the score and counted evidence set.
+    /// Logs the exact counted downstream task set only when trace logging is enabled so wait/grant evidence stays
+    /// available for deep scheduler diagnosis without crowding the default debug view.
     /// </summary>
     private void LogDownstreamWorkEvidence(ILogger taskLogger, ExecutionTask visibleTask, ExecutionTask executingTask, DownstreamWorkScore downstreamWork, bool granted)
     {
-        if (!taskLogger.IsEnabled(LogLevel.Debug))
+        if (!taskLogger.IsEnabled(LogLevel.Trace))
         {
             return;
         }
@@ -777,9 +777,9 @@ public sealed class ExecutionPlanScheduler
             .OrderBy(task => task.Title, StringComparer.Ordinal)
             .ThenBy(task => task.Id.Value, StringComparer.Ordinal)
             .ToList();
-        taskLogger.LogDebug(
-            "Execution-lock {Decision} downstream-work evidence. Branch='{VisibleTaskTitle}' Executable='{ExecutingTaskTitle}' Priority={DownstreamWorkPriority} Counted=[{CountedDownstreamTasks}]",
-            granted ? "grant" : "wait",
+        taskLogger.LogTrace(
+            "Execution lock {Decision} after downstream-work scoring. Branch='{VisibleTaskTitle}' Executable='{ExecutingTaskTitle}' Priority={DownstreamWorkPriority} Counted=[{CountedDownstreamTasks}]",
+            granted ? "granted" : "deferred",
             visibleTask.Title,
             executingTask.Title,
             downstreamWork.Count,

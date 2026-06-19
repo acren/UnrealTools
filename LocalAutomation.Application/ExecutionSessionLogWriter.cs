@@ -106,6 +106,12 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
                 return;
             }
 
+            // Re-evaluate the live file threshold per entry so settings changes affect subsequent session-file output.
+            if (!ApplicationLogThresholdSettings.AllowsFileOutput(entry.Verbosity))
+            {
+                return;
+            }
+
             try
             {
                 _writer.WriteLine(FormatEntry(entry));

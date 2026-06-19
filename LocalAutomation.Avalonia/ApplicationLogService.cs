@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using LocalAutomation.Application;
 using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
 using Serilog;
@@ -40,7 +41,9 @@ public static class ApplicationLogService
         string launchLogFilePath = ConfigureDiskLogging();
         BufferedLogger bufferedLogger = new(LogStream);
         _loggerFactory = LoggerFactory.Create(builder => builder.AddSerilog(dispose: false));
-        ILogger fileLogger = _loggerFactory.CreateLogger(App.ShellIdentity.LoggerCategoryName);
+        ILogger fileLogger = new ThresholdLogger(
+            _loggerFactory.CreateLogger(App.ShellIdentity.LoggerCategoryName),
+            ApplicationLogThresholdSettings.AllowsFileOutput);
         ApplicationLogger.Logger = new CompositeLogger(bufferedLogger, fileLogger);
 
         // Capture exceptions that escape normal async or UI flows so the output panel still shows the failure details
@@ -180,6 +183,53 @@ public static class ApplicationLogService
         public IDisposable BeginScope<TState>(TState state) where TState : notnull
         {
             return NullScope.Instance;
+        }
+    }
+
+    /// <summary>
+    /// Applies one live threshold predicate before delegating to the wrapped logger.
+    /// </summary>
+    private sealed class ThresholdLogger : ILogger
+    {
+        private readonly ILogger _innerLogger;
+        private readonly Func<LogLevel, bool> _isEnabled;
+
+        /// <summary>
+        /// Creates one filtering wrapper around the provided logger.
+        /// </summary>
+        public ThresholdLogger(ILogger innerLogger, Func<LogLevel, bool> isEnabled)
+        {
+            _innerLogger = innerLogger ?? throw new ArgumentNullException(nameof(innerLogger));
+            _isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
+        }
+
+        /// <summary>
+        /// Forwards one log call only when the current threshold allows the provided severity.
+        /// </summary>
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (!_isEnabled(logLevel))
+            {
+                return;
+            }
+
+            _innerLogger.Log(logLevel, eventId, state, exception, formatter);
+        }
+
+        /// <summary>
+        /// Reports whether the current threshold and wrapped logger both allow the provided severity.
+        /// </summary>
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            return _isEnabled(logLevel) && _innerLogger.IsEnabled(logLevel);
+        }
+
+        /// <summary>
+        /// Delegates structured scopes to the wrapped logger unchanged.
+        /// </summary>
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull
+        {
+            return _innerLogger.BeginScope(state) ?? NullScope.Instance;
         }
     }
 

@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using LocalAutomation.Runtime;
+using Microsoft.Extensions.Logging;
 
 namespace LocalAutomation.Application;
 
@@ -15,6 +16,8 @@ public sealed class ApplicationSettings : INotifyPropertyChanged
     private bool _revealHiddenTasks;
     private double _minimumPerformanceTelemetryMilliseconds;
     private double _minimumVisiblePerformanceTelemetryScopeMilliseconds;
+    private LogLevel _displayMinimumLogLevel = LogLevel.Debug;
+    private LogLevel _fileMinimumLogLevel = LogLevel.Trace;
     private readonly string _defaultOutputRootPath;
     private readonly string _defaultTempRootPath;
     private string _outputRootPath;
@@ -159,6 +162,50 @@ public sealed class ApplicationSettings : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Gets or sets the minimum severity that remains visible in the workspace log panes.
+    /// </summary>
+    [DisplayName("Display log level")]
+    [Description("Shows only log entries at or above this severity in the app and session log panes. This filter is retroactive, so lowering it reveals older buffered entries that were previously hidden.")]
+    [PersistedValue(PersistenceScope.Global)]
+    public LogLevel DisplayMinimumLogLevel
+    {
+        get => _displayMinimumLogLevel;
+        set
+        {
+            LogLevel normalizedValue = NormalizeLogLevel(value);
+            if (_displayMinimumLogLevel == normalizedValue)
+            {
+                return;
+            }
+
+            _displayMinimumLogLevel = normalizedValue;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the minimum severity written to durable launch and session log files.
+    /// </summary>
+    [DisplayName("File log level")]
+    [Description("Writes only log entries at or above this severity to durable launch and session log files. Changing this setting affects future file output and does not rewrite existing files.")]
+    [PersistedValue(PersistenceScope.Global)]
+    public LogLevel FileMinimumLogLevel
+    {
+        get => _fileMinimumLogLevel;
+        set
+        {
+            LogLevel normalizedValue = NormalizeLogLevel(value);
+            if (_fileMinimumLogLevel == normalizedValue)
+            {
+                return;
+            }
+
+            _fileMinimumLogLevel = normalizedValue;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
     /// Gets or sets whether graph views should reveal tasks that are normally collapsed as internal implementation
     /// detail.
     /// </summary>
@@ -178,6 +225,14 @@ public sealed class ApplicationSettings : INotifyPropertyChanged
             _revealHiddenTasks = value;
             OnPropertyChanged();
         }
+    }
+
+    /// <summary>
+    /// Normalizes persisted or UI-provided log levels to defined enum values.
+    /// </summary>
+    private static LogLevel NormalizeLogLevel(LogLevel value)
+    {
+        return Enum.IsDefined(typeof(LogLevel), value) ? value : LogLevel.Trace;
     }
 
     /// <summary>
