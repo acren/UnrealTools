@@ -58,6 +58,7 @@ public partial class ExecutionGraphCanvas : UserControl
     private bool _hasViewportState;
     private int _reconciliationCount;
     private NodeWidthUpdatePhase _nodeWidthUpdatePhase;
+    private ExecutionGraphNodeContextMenuController? _nodeContextMenuController;
 
     /// <summary>
     /// Represents the lifecycle of one coalesced batch of intrinsic-width updates flowing from visible node controls back
@@ -81,16 +82,36 @@ public partial class ExecutionGraphCanvas : UserControl
     }
 
     /// <summary>
-    /// Selects the clicked graph node inside the current graph view model.
+    /// Supplies the graph-node context-menu controller used to bind node menus as retained controls are created.
     /// </summary>
-    private void ExecutionNode_Click(object? sender, RoutedEventArgs e)
+    internal void SetNodeContextMenuController(ExecutionGraphNodeContextMenuController nodeContextMenuController)
     {
-        if (DataContext is not ExecutionGraphViewModel graph || sender is not Control { DataContext: ExecutionNodeViewModel node })
+        ArgumentNullException.ThrowIfNull(nodeContextMenuController);
+        if (ReferenceEquals(_nodeContextMenuController, nodeContextMenuController))
         {
             return;
         }
 
-        graph.SelectNode(node);
+        if (_nodeContextMenuController != null)
+        {
+            throw new InvalidOperationException($"{nameof(ExecutionGraphCanvas)} accepts one {nameof(ExecutionGraphNodeContextMenuController)} for its lifetime.");
+        }
+
+        _nodeContextMenuController = nodeContextMenuController;
+        BindNodeContextMenusToRetainedControls();
+    }
+
+    /// <summary>
+    /// Selects the clicked graph node inside the current graph view model.
+    /// </summary>
+    private void ExecutionNode_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ExecutionNodeViewModel node })
+        {
+            return;
+        }
+
+        SelectNode(node);
         e.Handled = true;
     }
 
@@ -947,6 +968,45 @@ public partial class ExecutionGraphCanvas : UserControl
     }
 
     /// <summary>
+    /// Binds the graph-node context menu to one retained node control through the configured controller.
+    /// </summary>
+    private void BindNodeContextMenu(ExecutionGraphNodeControlBase control)
+    {
+        ExecutionGraphNodeContextMenuController controller = _nodeContextMenuController
+            ?? throw new InvalidOperationException($"{nameof(ExecutionGraphCanvas)} requires {nameof(ExecutionGraphNodeContextMenuController)} before graph node controls are created.");
+        controller.Bind(control, SelectNode);
+    }
+
+    /// <summary>
+    /// Binds graph-node context menus to controls that already exist when the controller is supplied.
+    /// </summary>
+    private void BindNodeContextMenusToRetainedControls()
+    {
+        foreach (ExecutionGroupContainer container in _renderedGroupControls.Values)
+        {
+            BindNodeContextMenu(container);
+        }
+
+        foreach (ExecutionTaskCard card in _renderedTaskControls.Values)
+        {
+            BindNodeContextMenu(card);
+        }
+    }
+
+    /// <summary>
+    /// Selects one node inside the current graph view model when the canvas is bound to a graph.
+    /// </summary>
+    private void SelectNode(ExecutionNodeViewModel node)
+    {
+        if (DataContext is not ExecutionGraphViewModel graph)
+        {
+            return;
+        }
+
+        graph.SelectNode(node);
+    }
+
+    /// <summary>
     /// Creates one XAML-backed group control and positions it on the graph canvas.
     /// </summary>
     private ExecutionGroupContainer CreateGroupControl(ExecutionNodeViewModel group)
@@ -960,6 +1020,7 @@ public partial class ExecutionGraphCanvas : UserControl
         };
 
         container.Invoked += ExecutionNode_Click;
+        BindNodeContextMenu(container);
         AttachIntrinsicWidthObserver(container);
 
         Canvas.SetLeft(container, group.X);
@@ -992,6 +1053,7 @@ public partial class ExecutionGraphCanvas : UserControl
         };
 
         card.Invoked += ExecutionNode_Click;
+        BindNodeContextMenu(card);
         AttachIntrinsicWidthObserver(card);
 
         Canvas.SetLeft(card, node.X);

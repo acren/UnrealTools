@@ -326,7 +326,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             });
         };
         _attachedMetricsLogHandlers[runtimeTab] = metricsLogHandler;
-        session.LogStream.EntryAdded += metricsLogHandler;
+        session.Logs.Stream.EntryAdded += metricsLogHandler;
         session.TaskStateChanged += (taskId, state, outcome) =>
         {
             EnqueuePendingTaskStateChange(runtimeTab, taskId, state, outcome);
@@ -407,12 +407,12 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             RuntimeExecutionTaskId? selectedTaskId = SelectedRuntimeTab.Graph.SelectedTaskId;
             if (selectedTaskId == null)
             {
-                SelectedRuntimeTab.Session.LogStream.Clear();
+                SelectedRuntimeTab.Session.Logs.Stream.Clear();
                 SelectedRuntimeTab.Session.ResetCachedLogMetrics();
             }
             else
             {
-                SelectedRuntimeTab.Session.GetTaskLogStream(selectedTaskId)?.Clear();
+                SelectedRuntimeTab.Session.Logs.GetTaskLogStream(selectedTaskId)?.Clear();
             }
 
             SelectedRuntimeTab.RebuildMetricsFromSession();
@@ -553,22 +553,11 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Selects one graph node inside the provided runtime tab.
+    /// Publishes one status message from the execution workspace view layer.
     /// </summary>
-    public void SelectGraphNode(RuntimeWorkspaceTabViewModel runtimeTab, ExecutionNodeViewModel? node)
+    public void SetStatus(string message)
     {
-        if (runtimeTab == null)
-        {
-            throw new ArgumentNullException(nameof(runtimeTab));
-        }
-
-        runtimeTab.Graph.SelectNode(node);
-        RebuildTabSelectedLogEntries(runtimeTab);
-
-        if (ReferenceEquals(SelectedRuntimeTab, runtimeTab))
-        {
-            RaiseSelectedGraphSelectionStateChanged();
-        }
+        _setStatus(message);
     }
 
     /// <summary>
@@ -628,7 +617,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         _attachedLogStreams.Remove(runtimeTab);
         if (_attachedMetricsLogHandlers.Remove(runtimeTab, out Action<LogEntry>? metricsLogHandler) && runtimeTab.Session != null)
         {
-            runtimeTab.Session.LogStream.EntryAdded -= metricsLogHandler;
+            runtimeTab.Session.Logs.Stream.EntryAdded -= metricsLogHandler;
         }
 
         _attachedSessions.Remove(runtimeTab);
@@ -797,7 +786,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     /// </summary>
     private void AttachSessionLogs(RuntimeWorkspaceTabViewModel runtimeTab, RuntimeExecutionSession session)
     {
-        AttachLogStream(runtimeTab, session.LogStream);
+        AttachLogStream(runtimeTab, session.Logs.Stream);
     }
 
     /// <summary>
@@ -867,39 +856,11 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             return;
         }
 
-        List<LogEntry> sessionEntries = runtimeTab.Session.LogStream.Entries.ToList();
-        IReadOnlyList<RuntimeExecutionTaskId> selectedTaskIds = runtimeTab.Graph.GetSelectedLogTaskIds();
-        int sessionEntryCount = sessionEntries.Count;
-        List<LogEntry> scopedEntries;
-        string logSource;
-        int selectedTaskCount;
-        if (selectedTaskIds.Count == 0)
-        {
-            scopedEntries = sessionEntries;
-            logSource = "session";
-            selectedTaskCount = 0;
-        }
-        else
-        {
-            HashSet<RuntimeExecutionTaskId> selectedTaskIdSet = new(selectedTaskIds);
-            bool selectedScopeIncludesRoot = selectedTaskIdSet.Contains(runtimeTab.Session.RootTask.Id);
-            scopedEntries = sessionEntries
-                .Where(entry =>
-                {
-                    RuntimeExecutionTaskId? taskId = RuntimeExecutionTaskId.FromNullable(entry.TaskId);
-                    /* Session-level entries describe the whole run rather than one task. Show them only with the root scope so
-                       root selection behaves like the session overview without adding session noise to child-task logs. */
-                    return taskId == null
-                        ? selectedScopeIncludesRoot
-                        : selectedTaskIdSet.Contains(taskId.Value);
-                })
-                .ToList();
-            logSource = "selection";
-            selectedTaskCount = selectedTaskIdSet.Count;
-        }
-
-        IEnumerable<LogEntry> visibleRawEntries = scopedEntries
-            .Where(entry => MatchesActiveLogFilters(runtimeTab, entry));
+        int sessionEntryCount = runtimeTab.Session.Logs.Stream.Entries.Count;
+        IReadOnlyList<LogEntry> visibleRawEntries = runtimeTab.GetSelectedScopedLogEntries(
+            applyActiveFilters: true,
+            out string logSource,
+            out int selectedTaskCount);
         List<LogEntryViewModel> visibleEntries = visibleRawEntries
             .Select(CreateLogEntryViewModel)
             .ToList();
@@ -908,29 +869,6 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             .SetTag("session.entry.count", sessionEntryCount)
             .SetTag("visible.entry.count", visibleEntries.Count);
         runtimeTab.SetSelectedLogEntries(visibleEntries);
-    }
-
-    /// <summary>
-    /// Returns whether one scoped raw log entry should remain visible under the global display threshold and the tab's
-    /// active WARN and ERR filters.
-    /// </summary>
-    private static bool MatchesActiveLogFilters(RuntimeWorkspaceTabViewModel runtimeTab, LogEntry entry)
-    {
-        if (!ApplicationLogThresholdSettings.AllowsDisplay(entry.Verbosity))
-        {
-            return false;
-        }
-
-        bool warningFilterActive = runtimeTab.IsWarningLogFilterActive;
-        bool errorFilterActive = runtimeTab.IsErrorLogFilterActive;
-        if (!warningFilterActive && !errorFilterActive)
-        {
-            return true;
-        }
-
-        bool matchesWarning = warningFilterActive && entry.Verbosity == LogLevel.Warning;
-        bool matchesError = errorFilterActive && (entry.Verbosity == LogLevel.Error || entry.Verbosity == LogLevel.Critical);
-        return matchesWarning || matchesError;
     }
 
     /// <summary>

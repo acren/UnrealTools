@@ -67,7 +67,7 @@ public sealed class ExecutionWorkspaceViewModelTests
         Assert.True(selectedNode.IsContainer);
 
         /* Select the root container first so every descendant in the pending batch targets the current selected subtree. */
-        workspace.SelectGraphNode(runtimeTab, selectedNode);
+        runtimeTab.Graph.SelectNode(selectedNode);
 
         int selectedLogEntriesChangedCount = 0;
         runtimeTab.PropertyChanged += HandleRuntimeTabPropertyChanged;

@@ -137,7 +137,8 @@
                         Background="{DynamicResource GraphiteTerminalBrush}"
                         BorderBrush="{DynamicResource GraphiteLineBrush}"
                         BorderThickness="0">
-                    <controls:ExecutionGraphCanvas Margin="12,10,12,12"
+                    <controls:ExecutionGraphCanvas x:Name="ExecutionGraphCanvas"
+                                                   Margin="12,10,12,12"
                                                    DataContext="{Binding SelectedGraph}" />
                 </Border>
 

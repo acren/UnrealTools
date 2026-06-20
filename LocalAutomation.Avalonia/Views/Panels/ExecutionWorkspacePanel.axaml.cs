@@ -1,3 +1,4 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -15,6 +16,7 @@ namespace LocalAutomation.Avalonia.Views.Panels;
 /// </summary>
 public partial class ExecutionWorkspacePanel : UserControl
 {
+    private readonly ExecutionGraphNodeContextMenuController _graphNodeContextMenuController;
     private Border? _graphHost;
     private GridSplitter? _graphLogSplitter;
     private Border? _logHost;
@@ -25,6 +27,10 @@ public partial class ExecutionWorkspacePanel : UserControl
     /// </summary>
     public ExecutionWorkspacePanel()
     {
+        _graphNodeContextMenuController = new ExecutionGraphNodeContextMenuController(
+            getClipboard: () => TopLevel.GetTopLevel(this)?.Clipboard,
+            setStatus: message => ViewModel.SetStatus(message),
+            getCurrentSessionLog: () => ViewModel.SelectedRuntimeTab?.Session?.Logs);
         InitializeComponent();
         AddHandler(ExecutionMetricsStrip.WarningFilterClickedEvent, HandleWarningFilterClicked);
         AddHandler(ExecutionMetricsStrip.ErrorFilterClickedEvent, HandleErrorFilterClicked);
@@ -126,22 +132,6 @@ public partial class ExecutionWorkspacePanel : UserControl
     private void ClearLog_Click(object? sender, RoutedEventArgs e)
     {
         ViewModel.ClearSelectedRuntimeLog();
-    }
-
-    /// <summary>
-    /// Routes graph-node clicks from the embedded graph control into the runtime workspace selection model.
-    /// </summary>
-    private void GraphNode_Click(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is not ExecutionWorkspaceViewModel viewModel ||
-            viewModel.SelectedRuntimeTab == null ||
-            sender is not Control { DataContext: ExecutionNodeViewModel node })
-        {
-            return;
-        }
-
-        viewModel.SelectGraphNode(viewModel.SelectedRuntimeTab, node);
-        e.Handled = true;
     }
 
     /// <summary>
@@ -272,6 +262,9 @@ public partial class ExecutionWorkspacePanel : UserControl
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+        ExecutionGraphCanvas executionGraphCanvas = this.FindControl<ExecutionGraphCanvas>("ExecutionGraphCanvas")
+            ?? throw new InvalidOperationException($"{nameof(ExecutionWorkspacePanel)} requires the ExecutionGraphCanvas control.");
+        executionGraphCanvas.SetNodeContextMenuController(_graphNodeContextMenuController);
         _graphHost = this.FindControl<Border>("GraphHost");
         _graphLogSplitter = this.FindControl<GridSplitter>("GraphLogSplitter");
         _logHost = this.FindControl<Border>("LogHost");

@@ -42,7 +42,11 @@ public sealed class ExecutionSession
     /// </summary>
     public ExecutionSession(ILogStream logStream, ExecutionPlan plan, string? logDirectory = null)
     {
-        LogStream = logStream ?? throw new ArgumentNullException(nameof(logStream));
+        if (logStream == null)
+        {
+            throw new ArgumentNullException(nameof(logStream));
+        }
+
         if (plan == null)
         {
             throw new ArgumentNullException(nameof(plan));
@@ -52,6 +56,7 @@ public sealed class ExecutionSession
         TempSlot = OutputPaths.AllocateSessionTempSlot();
         TempRootPath = OutputPaths.GetSessionTempRoot(TempSlot);
         StartedAt = DateTimeOffset.Now;
+        Logs = new ExecutionSessionLog(this, logStream);
         _sessionLogger = new SessionLogger(this);
 
         try
@@ -81,7 +86,15 @@ public sealed class ExecutionSession
     /// </summary>
     internal string TempRootPath { get; }
 
-    public ILogStream LogStream { get; }
+    /// <summary>
+    /// Gets the concrete session-log owner for this execution session.
+    /// </summary>
+    public ExecutionSessionLog Logs { get; }
+
+    /// <summary>
+    /// Gets the aggregate buffered log stream exposed by the session-log owner.
+    /// </summary>
+    public ILogStream LogStream => Logs.Stream;
 
     /// <summary>
     /// Gets the durable log file path assigned to mirror this session's in-memory log stream when file logging is configured.
@@ -303,7 +316,7 @@ public sealed class ExecutionSession
             throw new ArgumentNullException(nameof(entry));
         }
 
-        LogStream.Add(entry);
+        Logs.Append(entry);
         (int warningDelta, int errorDelta) = GetLogCountDeltas(entry);
         ExecutionTaskId? taskId = ExecutionTaskId.FromNullable(entry.TaskId);
 
@@ -316,7 +329,6 @@ public sealed class ExecutionSession
             ExecutionTask task = taskId == null
                 ? _rootTask ?? throw new InvalidOperationException("Session has no root task.")
                 : GetTaskCore(taskId.Value);
-            task.LogStream.Add(entry);
             ApplyTaskLogMetrics(task, warningDelta, errorDelta);
         });
     }
@@ -346,17 +358,12 @@ public sealed class ExecutionSession
         });
     }
 
+    /// <summary>
+    /// Returns the buffered direct log stream for one task when that task exists in the session.
+    /// </summary>
     public BufferedLogStream? GetTaskLogStream(ExecutionTaskId? taskId)
     {
-        if (taskId == null)
-        {
-            return null;
-        }
-
-        /* Tree-walk lookup is acceptable here because this method is called infrequently for UI-driven log panel
-           selection, not on the scheduler hot path. The shared graph lock still keeps the tree stable while the walk
-           runs. */
-        return WithGraphReadLock(() => _rootTask?.FindTask(taskId.Value)?.LogStream);
+        return Logs.GetTaskLogStream(taskId);
     }
 
     public void SetTaskState(ExecutionTaskId taskId, ExecutionTaskState state)

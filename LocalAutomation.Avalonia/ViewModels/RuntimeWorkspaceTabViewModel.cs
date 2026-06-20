@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using LocalAutomation.Application;
 using LocalAutomation.Core;
 using RuntimeExecutionSession = LocalAutomation.Runtime.ExecutionSession;
 using RuntimeExecutionTask = LocalAutomation.Runtime.ExecutionTask;
@@ -212,6 +213,33 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Returns the raw session-log entries visible for the current graph selection, optionally applying the tab's active
+    /// severity filters.
+    /// </summary>
+    public IReadOnlyList<LogEntry> GetSelectedScopedLogEntries(bool applyActiveFilters, out string logSource, out int selectedTaskCount)
+    {
+        if (Session == null)
+        {
+            logSource = "none";
+            selectedTaskCount = 0;
+            return Array.Empty<LogEntry>();
+        }
+
+        IReadOnlyList<RuntimeExecutionTaskId> selectedTaskIds = Graph.GetSelectedLogTaskIds();
+        IReadOnlyList<LogEntry> scopedEntries = Session.Logs.GetScopedEntries(selectedTaskIds);
+        logSource = selectedTaskIds.Count == 0 ? "session" : "selection";
+        selectedTaskCount = selectedTaskIds.Count;
+        if (!applyActiveFilters)
+        {
+            return scopedEntries;
+        }
+
+        return scopedEntries
+            .Where(MatchesActiveLogFilters)
+            .ToList();
+    }
+
+    /// <summary>
     /// Toggles the tab-local WARN severity filter used by the visible log pane.
     /// </summary>
     public void ToggleWarningLogFilter()
@@ -321,6 +349,29 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
         }
 
         activity.SetTag("refreshed.task.count", refreshedTaskIds.Count);
+    }
+
+    /// <summary>
+    /// Returns whether one raw log entry should remain visible under the global display threshold and the tab's active
+    /// WARN and ERR filters.
+    /// </summary>
+    private bool MatchesActiveLogFilters(LogEntry entry)
+    {
+        if (!ApplicationLogThresholdSettings.AllowsDisplay(entry.Verbosity))
+        {
+            return false;
+        }
+
+        bool warningFilterActive = IsWarningLogFilterActive;
+        bool errorFilterActive = IsErrorLogFilterActive;
+        if (!warningFilterActive && !errorFilterActive)
+        {
+            return true;
+        }
+
+        bool matchesWarning = warningFilterActive && entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Warning;
+        bool matchesError = errorFilterActive && (entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Error || entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Critical);
+        return matchesWarning || matchesError;
     }
 
     /// <summary>
