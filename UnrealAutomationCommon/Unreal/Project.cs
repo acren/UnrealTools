@@ -24,7 +24,7 @@ namespace UnrealAutomationCommon.Unreal
         {
             if (!ProjectPaths.Instance.IsTargetDirectory(targetPath))
             {
-                AppLogger.LoggerInstance.LogError($"Package {targetPath} does not contain a .uproject");
+                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain a .uproject");
                 return;
             }
 
@@ -210,7 +210,7 @@ namespace UnrealAutomationCommon.Unreal
         private void RecordBackgroundException(Exception exception)
         {
             _backgroundException = exception;
-            AppLogger.LoggerInstance.LogError(exception, "Project background watcher failed for '{ProjectPath}'.", TargetPath);
+            ApplicationLogger.Logger.LogError(exception, "Project background watcher failed for '{ProjectPath}'.", TargetPath);
         }
 
         /// <summary>

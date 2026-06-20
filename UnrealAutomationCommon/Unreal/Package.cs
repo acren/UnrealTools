@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
@@ -22,7 +23,7 @@ namespace UnrealAutomationCommon.Unreal
         {
             if (!PackagePaths.Instance.IsTargetDirectory(targetPath))
             {
-                AppLogger.LoggerInstance.LogError($"Package {targetPath} does not contain executable");
+                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain executable");
                 return;
             }
 

@@ -9,6 +9,7 @@ using LocalAutomation.Application;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Events;
 using RuntimeExecutionPlan = LocalAutomation.Runtime.ExecutionPlan;
 using RuntimeExecutionSession = LocalAutomation.Runtime.ExecutionSession;
 using RuntimeExecutionSessionId = LocalAutomation.Runtime.ExecutionSessionId;
@@ -45,7 +46,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private readonly HashSet<RuntimeWorkspaceTabViewModel> _pendingGraphRefreshTabs = new();
     private readonly Dictionary<RuntimeWorkspaceTabViewModel, ILogStream> _attachedLogStreams = new();
     private readonly Dictionary<RuntimeWorkspaceTabViewModel, RuntimeExecutionSession> _attachedSessions = new();
-    private readonly Dictionary<RuntimeWorkspaceTabViewModel, Action<LogEntry>> _attachedMetricsLogHandlers = new();
+    private readonly Dictionary<RuntimeWorkspaceTabViewModel, Action<LogEvent>> _attachedMetricsLogHandlers = new();
     private bool _isPendingLogFlushStartQueued;
     private RuntimeWorkspaceTabViewModel? _observedWorkspaceTab;
     private RuntimeWorkspaceTabViewModel? _selectedRuntimeTab;
@@ -306,12 +307,15 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         }
 
         AttachSessionLogs(runtimeTab, session);
-        Action<LogEntry> metricsLogHandler = entry =>
+        Action<LogEvent> metricsLogHandler = entry =>
         {
             /* Runtime task metrics only change on warning/error log lines that belong to one concrete task. Ignore every
                other entry so verbose info/debug output does not post needless UI refreshes. */
-            RuntimeExecutionTaskId? taskId = RuntimeExecutionTaskId.FromNullable(entry.TaskId);
-            if ((entry.Verbosity != LogLevel.Warning && entry.Verbosity < LogLevel.Error) || taskId == null)
+            RuntimeExecutionTaskId? taskId = ExecutionSessionLog.TryGetTaskId(entry, out RuntimeExecutionTaskId parsedTaskId)
+                ? parsedTaskId
+                : null;
+            LogLevel logLevel = LogLevelInterop.ToMicrosoftLogLevel(entry.Level);
+            if ((logLevel != LogLevel.Warning && logLevel < LogLevel.Error) || taskId == null)
             {
                 return;
             }
@@ -407,7 +411,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             RuntimeExecutionTaskId? selectedTaskId = SelectedRuntimeTab.Graph.SelectedTaskId;
             if (selectedTaskId == null)
             {
-                SelectedRuntimeTab.Session.Logs.Stream.Clear();
+                SelectedRuntimeTab.Session.Logs.Clear();
                 SelectedRuntimeTab.Session.ResetCachedLogMetrics();
             }
             else
@@ -615,7 +619,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         RemovePendingTaskStateChanges(runtimeTab);
         RemovePendingGraphRefresh(runtimeTab);
         _attachedLogStreams.Remove(runtimeTab);
-        if (_attachedMetricsLogHandlers.Remove(runtimeTab, out Action<LogEntry>? metricsLogHandler) && runtimeTab.Session != null)
+        if (_attachedMetricsLogHandlers.Remove(runtimeTab, out Action<LogEvent>? metricsLogHandler) && runtimeTab.Session != null)
         {
             runtimeTab.Session.Logs.Stream.EntryAdded -= metricsLogHandler;
         }
@@ -836,7 +840,9 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
 
         if (runtimeTab.IsApplicationLog)
         {
-            List<LogEntry> applicationScopedEntries = ApplicationLogService.LogStream.Entries.ToList();
+            List<LogEvent> applicationScopedEntries = ApplicationLogService.LogStream.Entries
+                .Where(entry => ApplicationLogThresholdSettings.AllowsDisplay(LogLevelInterop.ToMicrosoftLogLevel(entry.Level)))
+                .ToList();
             List<LogEntryViewModel> applicationEntries = applicationScopedEntries.Select(CreateLogEntryViewModel).ToList();
             activity.SetTag("log.source", "application")
                 .SetTag("selected.task.count", 0)
@@ -857,7 +863,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         }
 
         int sessionEntryCount = runtimeTab.Session.Logs.Stream.Entries.Count;
-        IReadOnlyList<LogEntry> visibleRawEntries = runtimeTab.GetSelectedScopedLogEntries(
+        IReadOnlyList<LogEvent> visibleRawEntries = runtimeTab.GetSelectedScopedLogEntries(
             applyActiveFilters: true,
             out string logSource,
             out int selectedTaskCount);
@@ -1257,9 +1263,9 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     /// <summary>
     /// Adapts one shared log entry into the UI-friendly log row model.
     /// </summary>
-    private static LogEntryViewModel CreateLogEntryViewModel(LogEntry entry)
+    private static LogEntryViewModel CreateLogEntryViewModel(LogEvent entry)
     {
-        return new LogEntryViewModel(entry.Message, entry.Verbosity, entry.Timestamp);
+        return new LogEntryViewModel(entry);
     }
 
 }

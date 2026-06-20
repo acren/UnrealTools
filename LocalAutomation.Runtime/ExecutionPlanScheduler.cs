@@ -23,7 +23,6 @@ public sealed class ExecutionPlanScheduler
     }
 
     private readonly ILogger _logger;
-    private readonly IExecutionTaskStateSink? _taskStateSink;
     private readonly ExecutionSession _session;
     // Downstream-work scoring stays separate from orchestration so scheduler ordering and lock admission share one policy module.
     private readonly DownstreamWorkScorer _downstreamWorkScorer;
@@ -46,7 +45,6 @@ public sealed class ExecutionPlanScheduler
     public ExecutionPlanScheduler(ILogger logger, ExecutionSession? session = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _taskStateSink = logger as IExecutionTaskStateSink;
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _downstreamWorkScorer = new DownstreamWorkScorer(_session);
     }
@@ -1190,12 +1188,7 @@ public sealed class ExecutionPlanScheduler
     /// </summary>
     private ILogger CreateTaskLogger(ExecutionTaskId taskId)
     {
-        if (_logger is IExecutionTaskLoggerFactory loggerFactory)
-        {
-            return loggerFactory.CreateTaskLogger(taskId);
-        }
-
-        return _logger;
+        return _session.CreateTaskLogger(taskId);
     }
 
     /// <summary>
@@ -1269,13 +1262,12 @@ public sealed class ExecutionPlanScheduler
     }
 
     /// <summary>
-    /// Records one explicit task-state transition in the session and mirrors it through the active task-state sink. The
-    /// session owns transition logging so direct scheduler changes and derived parent rollups share one log path.
+    /// Records one explicit task-state transition in the session. The session owns transition logging so direct
+    /// scheduler changes and derived parent rollups share one log path.
     /// </summary>
     private void SetState(ExecutionTaskId taskId, ExecutionTaskState state)
     {
         _session.SetTaskState(taskId, state);
-        _taskStateSink?.SetTaskState(taskId, state);
     }
 
     /// <summary>

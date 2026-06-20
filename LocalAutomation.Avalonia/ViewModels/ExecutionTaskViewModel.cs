@@ -1,6 +1,5 @@
 using System;
 using System.ComponentModel;
-using System.Linq;
 using Avalonia.Threading;
 using RuntimeExecutionTask = LocalAutomation.Runtime.ExecutionTask;
 using RuntimeExecutionTaskId = LocalAutomation.Runtime.ExecutionTaskId;
@@ -52,7 +51,7 @@ public sealed class ExecutionTaskViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Gets the human-readable ancestor path for the task.
     /// </summary>
-    public string DisplayPath => string.Join(" > ", EnumerateTaskPath().Select(task => task.Title));
+    public string DisplayPath => Task.GetDisplayPath();
 
     /// <summary>
     /// Gets the parent task identifier when this task participates in the execution hierarchy.
@@ -129,20 +128,6 @@ public sealed class ExecutionTaskViewModel : ViewModelBase, IDisposable
         }
 
         Dispatcher.UIThread.Post(() => RaiseTaskProperties(e.PropertyName));
-    }
-
-    /// <summary>
-    /// Enumerates the task's ancestor chain from the root task down to this task.
-    /// </summary>
-    private System.Collections.Generic.IEnumerable<RuntimeExecutionTask> EnumerateTaskPath()
-    {
-        System.Collections.Generic.Stack<RuntimeExecutionTask> path = new();
-        for (RuntimeExecutionTask? currentTask = Task; currentTask != null; currentTask = currentTask.Parent)
-        {
-            path.Push(currentTask);
-        }
-
-        return path;
     }
 
     /// <summary>

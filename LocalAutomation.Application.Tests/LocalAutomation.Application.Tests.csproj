@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestUtilities\AppFacingTestLoggingBootstrap.cs" Link="TestUtilities\AppFacingTestLoggingBootstrap.cs" />
     <Compile Include="..\TestUtilities\ExecutionTestCommon.cs" Link="TestUtilities\ExecutionTestCommon.cs" />
     <Compile Include="..\TestUtilities\TestLoggingBootstrap.cs" Link="TestUtilities\TestLoggingBootstrap.cs" />
   </ItemGroup>

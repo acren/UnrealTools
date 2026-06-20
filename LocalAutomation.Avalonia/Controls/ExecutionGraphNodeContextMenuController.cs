@@ -1,15 +1,15 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using LocalAutomation.Application;
 using LocalAutomation.Avalonia.ViewModels;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
-using Microsoft.Extensions.Logging;
+using Serilog.Events;
 
 namespace LocalAutomation.Avalonia.Controls;
 
@@ -71,10 +71,13 @@ internal sealed class ExecutionGraphNodeContextMenuController
 
         menu.Opening += (_, _) =>
         {
+            /* Name and path actions only need the bound node, while log export needs a live session log. Keeping that
+               availability check here lets Avalonia render the unavailable log action as disabled instead of reporting
+               an avoidable action-time failure. */
             bool hasNode = TryGetCurrentNode(control) != null;
             copyNameItem.IsEnabled = hasNode;
             copyPathItem.IsEnabled = hasNode;
-            copyLogPathItem.IsEnabled = hasNode;
+            copyLogPathItem.IsEnabled = hasNode && _getCurrentSessionLog() != null;
         };
 
         return menu;
@@ -208,35 +211,13 @@ internal sealed class ExecutionGraphNodeContextMenuController
     {
         string fileName = $"localautomation-task-log-{DateTimeOffset.Now:yyyyMMdd_HHmmssfff}-{ExecutionPathConventions.MakeCompactSegment(node.Task.DisplayPath, 48)}.log";
         string filePath = Path.Combine(Path.GetTempPath(), fileName);
-        string[] lines = sessionLog.GetTaskScopedEntries(node.Id)
-            .Select(FormatLogEntry)
-            .ToArray();
-        File.WriteAllLines(filePath, lines);
-        return filePath;
-    }
-
-    /// <summary>
-    /// Formats one exported task-log line with timestamp and severity so the temp file is readable outside the UI.
-    /// </summary>
-    private static string FormatLogEntry(LogEntry entry)
-    {
-        return $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{GetLogLevelText(entry.Verbosity)}] {entry.Message}";
-    }
-
-    /// <summary>
-    /// Returns one compact severity label for exported task-log files.
-    /// </summary>
-    private static string GetLogLevelText(LogLevel logLevel)
-    {
-        return logLevel switch
+        using StreamWriter writer = new(filePath);
+        IReadOnlyList<LogEvent> scopedEvents = sessionLog.GetTaskScopedEvents(node.Id);
+        foreach (LogEvent scopedEvent in scopedEvents)
         {
-            LogLevel.Trace => "TRACE",
-            LogLevel.Debug => "DEBUG",
-            LogLevel.Information => "INFO",
-            LogLevel.Warning => "WARN",
-            LogLevel.Error => "ERROR",
-            LogLevel.Critical => "CRITICAL",
-            _ => logLevel.ToString().ToUpperInvariant()
-        };
+            UnifiedLogTextFormatting.Format(writer, scopedEvent);
+        }
+
+        return filePath;
     }
 }

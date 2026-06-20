@@ -1,5 +1,6 @@
 using System;
 using System.Windows.Input;
+using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
 
 namespace UnrealAutomationCommon
@@ -41,7 +42,7 @@ namespace UnrealAutomationCommon
             }
             catch (Exception e)
             {
-                AppLogger.Instance.Logger.LogError(e.ToString());
+                ApplicationLogger.Logger.LogError(e.ToString());
             }
         }
 

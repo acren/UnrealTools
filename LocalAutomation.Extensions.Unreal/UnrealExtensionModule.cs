@@ -46,20 +46,10 @@ public sealed class UnrealExtensionModule : IExtensionModule
             throw new ArgumentNullException(nameof(registry));
         }
 
-        RegisterLegacyLoggerBridge();
         registry.RegisterTargetFactory(new UnrealPathTargetFactory());
         registry.RegisterSettingValueConverter(new EngineVersionListOptionValueConverter());
         registry.RegisterSettingValueConverter(new TraceChannelListOptionValueConverter());
         RegisterContextActions(registry);
-    }
-
-    /// <summary>
-    /// Bridges the legacy UnrealAutomationCommon logger singleton onto the shared LocalAutomation application logger so
-    /// old Unreal runtime code can log safely inside the new host.
-    /// </summary>
-    private static void RegisterLegacyLoggerBridge()
-    {
-        UnrealAutomationCommon.AppLogger.Instance.Logger = ApplicationLogger.Logger;
     }
 
     /// <summary>

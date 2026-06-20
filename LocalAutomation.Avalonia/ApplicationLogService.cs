@@ -3,14 +3,12 @@ using System.Threading.Tasks;
 using LocalAutomation.Application;
 using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
-using Serilog;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace LocalAutomation.Avalonia;
 
 /// <summary>
-/// Owns the shared shell's process-wide log stream so startup diagnostics, unhandled exceptions, and forwarded
-/// runtime logs all flow into the same output panel even when no operation is currently executing.
+/// Owns the shared shell's process-wide Serilog-backed logging pipeline and UI-facing log stream.
 /// </summary>
 public static class ApplicationLogService
 {
@@ -19,7 +17,6 @@ public static class ApplicationLogService
     private const int MaxRollingLaunchLogFiles = 3;
 
     private static bool _isInitialized;
-    private static ILoggerFactory? _loggerFactory;
 
     /// <summary>
     /// Gets the shared in-memory log stream rendered by the shell.
@@ -27,8 +24,7 @@ public static class ApplicationLogService
     public static BufferedLogStream LogStream { get; } = new();
 
     /// <summary>
-    /// Initializes the global application logger bridge and hooks process-wide exception reporting once per application
-    /// run.
+    /// Initializes the global application logger bridge and hooks process-wide exception reporting once per run.
     /// </summary>
     public static void Initialize()
     {
@@ -38,16 +34,15 @@ public static class ApplicationLogService
         }
 
         _isInitialized = true;
-        string launchLogFilePath = ConfigureDiskLogging();
-        BufferedLogger bufferedLogger = new(LogStream);
-        _loggerFactory = LoggerFactory.Create(builder => builder.AddSerilog(dispose: false));
-        ILogger fileLogger = new ThresholdLogger(
-            _loggerFactory.CreateLogger(App.ShellIdentity.LoggerCategoryName),
-            ApplicationLogThresholdSettings.AllowsFileOutput);
-        ApplicationLogger.Logger = new CompositeLogger(bufferedLogger, fileLogger);
+        string launchLogFilePath = CreateLaunchLogFilePath();
+        ProcessLoggingBootstrap.EnsureShellOutputsInitialized(
+            loggerCategoryName: App.ShellIdentity.LoggerCategoryName,
+            applicationLogSink: new ApplicationLogBufferSink(LogStream),
+            launchLogFilePath: launchLogFilePath,
+            fileSizeLimitBytes: MaxLogFileSizeBytes,
+            retainedFileCountLimit: MaxRollingLaunchLogFiles);
 
-        // Capture exceptions that escape normal async or UI flows so the output panel still shows the failure details
-        // before the process tears down.
+        // Capture exceptions that escape normal async or UI flows so the output panel still shows the failure details.
         AppDomain.CurrentDomain.UnhandledException += HandleUnhandledException;
         TaskScheduler.UnobservedTaskException += HandleUnobservedTaskException;
 
@@ -56,13 +51,11 @@ public static class ApplicationLogService
     }
 
     /// <summary>
-    /// Flushes the file logger pipeline when the shell closes so the latest crash details land on disk.
+    /// Flushes the Serilog pipeline when the shell closes so the latest crash details land on disk.
     /// </summary>
     public static void Shutdown()
     {
-        _loggerFactory?.Dispose();
-        _loggerFactory = null;
-        Log.CloseAndFlush();
+        ProcessLoggingBootstrap.Shutdown();
     }
 
     /// <summary>
@@ -113,211 +106,12 @@ public static class ApplicationLogService
     }
 
     /// <summary>
-    /// Configures the Serilog file sink used for persistent launch logs and returns the active file path.
+    /// Creates the next launch-log file path after clearing old retained launch logs.
     /// </summary>
-    private static string ConfigureDiskLogging()
+    private static string CreateLaunchLogFilePath()
     {
         LoggingPaths.CleanupOldLaunchLogs(MaxLaunchLogFiles);
-        string launchLogFilePath = LoggingPaths.CreateLaunchLogFilePath();
-
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .WriteTo.File(
-                path: launchLogFilePath,
-                rollOnFileSizeLimit: true,
-                fileSizeLimitBytes: MaxLogFileSizeBytes,
-                retainedFileCountLimit: MaxRollingLaunchLogFiles,
-                shared: true)
-            .CreateLogger();
-
-        return launchLogFilePath;
+        return LoggingPaths.CreateLaunchLogFilePath();
     }
 
-    /// <summary>
-    /// Writes formatted MEL log events into the shared buffered log stream used by the Avalonia output panel.
-    /// </summary>
-    private sealed class BufferedLogger : ILogger
-    {
-        private readonly BufferedLogStream _logStream;
-
-        /// <summary>
-        /// Creates a buffered logger for the provided in-memory log stream.
-        /// </summary>
-        public BufferedLogger(BufferedLogStream logStream)
-        {
-            _logStream = logStream;
-        }
-
-        /// <summary>
-        /// Appends the rendered message and exception details to the shared output stream.
-        /// </summary>
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            string message = formatter(state, exception);
-            if (exception != null)
-            {
-                message = string.IsNullOrWhiteSpace(message)
-                    ? exception.ToString()
-                    : message + Environment.NewLine + exception;
-            }
-
-            _logStream.Add(new LogEntry
-            {
-                Timestamp = DateTimeOffset.Now,
-                Message = message,
-                Verbosity = logLevel
-            });
-        }
-
-        /// <summary>
-        /// Keeps all log levels enabled because the UI log stream is the primary diagnostics surface for the shell.
-        /// </summary>
-        public bool IsEnabled(LogLevel logLevel)
-        {
-            return true;
-        }
-
-        /// <summary>
-        /// Returns a no-op scope because the buffered output stream does not currently model structured scopes.
-        /// </summary>
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-        {
-            return NullScope.Instance;
-        }
-    }
-
-    /// <summary>
-    /// Applies one live threshold predicate before delegating to the wrapped logger.
-    /// </summary>
-    private sealed class ThresholdLogger : ILogger
-    {
-        private readonly ILogger _innerLogger;
-        private readonly Func<LogLevel, bool> _isEnabled;
-
-        /// <summary>
-        /// Creates one filtering wrapper around the provided logger.
-        /// </summary>
-        public ThresholdLogger(ILogger innerLogger, Func<LogLevel, bool> isEnabled)
-        {
-            _innerLogger = innerLogger ?? throw new ArgumentNullException(nameof(innerLogger));
-            _isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
-        }
-
-        /// <summary>
-        /// Forwards one log call only when the current threshold allows the provided severity.
-        /// </summary>
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (!_isEnabled(logLevel))
-            {
-                return;
-            }
-
-            _innerLogger.Log(logLevel, eventId, state, exception, formatter);
-        }
-
-        /// <summary>
-        /// Reports whether the current threshold and wrapped logger both allow the provided severity.
-        /// </summary>
-        public bool IsEnabled(LogLevel logLevel)
-        {
-            return _isEnabled(logLevel) && _innerLogger.IsEnabled(logLevel);
-        }
-
-        /// <summary>
-        /// Delegates structured scopes to the wrapped logger unchanged.
-        /// </summary>
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-        {
-            return _innerLogger.BeginScope(state) ?? NullScope.Instance;
-        }
-    }
-
-    /// <summary>
-    /// Mirrors each log entry to both the in-memory UI log stream and the file-backed logger pipeline.
-    /// </summary>
-    private sealed class CompositeLogger : ILogger
-    {
-        private readonly ILogger _bufferedLogger;
-        private readonly ILogger _fileLogger;
-
-        /// <summary>
-        /// Creates a composite logger that fans out to both UI and file destinations.
-        /// </summary>
-        public CompositeLogger(ILogger bufferedLogger, ILogger fileLogger)
-        {
-            _bufferedLogger = bufferedLogger;
-            _fileLogger = fileLogger;
-        }
-
-        /// <summary>
-        /// Writes the same log entry to both backing loggers.
-        /// </summary>
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            _bufferedLogger.Log(logLevel, eventId, state, exception, formatter);
-            _fileLogger.Log(logLevel, eventId, state, exception, formatter);
-        }
-
-        /// <summary>
-        /// Reports whether either backing logger is enabled for the requested level.
-        /// </summary>
-        public bool IsEnabled(LogLevel logLevel)
-        {
-            return _bufferedLogger.IsEnabled(logLevel) || _fileLogger.IsEnabled(logLevel);
-        }
-
-        /// <summary>
-        /// Returns a composite scope that keeps both backing logger scopes alive for the same operation.
-        /// </summary>
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-        {
-            return new ScopePair(_bufferedLogger.BeginScope(state) ?? NullScope.Instance, _fileLogger.BeginScope(state) ?? NullScope.Instance);
-        }
-    }
-
-    /// <summary>
-    /// Disposes paired scopes created by the composite logger.
-    /// </summary>
-    private sealed class ScopePair : IDisposable
-    {
-        private readonly IDisposable _first;
-        private readonly IDisposable _second;
-
-        /// <summary>
-        /// Creates a scope wrapper for two underlying logging scopes.
-        /// </summary>
-        public ScopePair(IDisposable first, IDisposable second)
-        {
-            _first = first;
-            _second = second;
-        }
-
-        /// <summary>
-        /// Disposes both underlying scopes.
-        /// </summary>
-        public void Dispose()
-        {
-            _second.Dispose();
-            _first.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Provides a shared no-op scope instance for log calls that request scoped logging.
-    /// </summary>
-    private sealed class NullScope : IDisposable
-    {
-        /// <summary>
-        /// Gets the singleton no-op scope instance.
-        /// </summary>
-        public static NullScope Instance { get; } = new();
-
-        /// <summary>
-        /// Disposes the no-op scope.
-        /// </summary>
-        public void Dispose()
-        {
-        }
-    }
 }

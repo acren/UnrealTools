@@ -1,12 +1,11 @@
 using System;
-using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
 
 namespace TestUtilities;
 
 /// <summary>
-/// Builds one shared MEL logger pipeline for test assemblies so they can initialize process-wide logging without per-test
-/// wiring.
+/// Builds one shared MEL logger factory for test assemblies without taking ownership of the product's global logging
+/// bootstrap.
 /// </summary>
 public static class TestLoggingBootstrap
 {
@@ -26,6 +25,10 @@ public static class TestLoggingBootstrap
         }
     }
 
+    /// <summary>
+    /// Creates the shared test logger factory once so tests can request ordinary MEL loggers without mutating or
+    /// depending on application-layer bootstrap ownership.
+    /// </summary>
     private static void EnsureInitialized()
     {
         lock (SyncRoot)
@@ -41,8 +44,6 @@ public static class TestLoggingBootstrap
                 builder.AddConsole();
             });
 
-            ILogger rootLogger = _loggerFactory.CreateLogger("TestHost");
-            ApplicationLogger.Logger = rootLogger;
             _isInitialized = true;
         }
     }

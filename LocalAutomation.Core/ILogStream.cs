@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Serilog.Events;
 
 namespace LocalAutomation.Core;
 
@@ -9,22 +10,22 @@ namespace LocalAutomation.Core;
 public interface ILogStream
 {
     /// <summary>
-    /// Raised when a new log entry is appended.
+    /// Raised when a new Serilog event is appended.
     /// </summary>
-    event Action<LogEntry>? EntryAdded;
+    event Action<LogEvent>? EntryAdded;
 
     /// <summary>
-    /// Gets the current buffered entries.
+    /// Gets the current buffered Serilog events.
     /// </summary>
-    IReadOnlyList<LogEntry> Entries { get; }
+    IReadOnlyList<LogEvent> Entries { get; }
 
     /// <summary>
-    /// Appends a new buffered log entry.
+    /// Appends a new buffered Serilog event.
     /// </summary>
-    void Add(LogEntry entry);
+    void Add(LogEvent entry);
 
     /// <summary>
-    /// Clears the buffered log entries.
+    /// Clears the buffered log events.
     /// </summary>
     void Clear();
 }

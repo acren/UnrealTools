@@ -3,6 +3,8 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using LocalAutomation.Application;
 using LocalAutomation.Core;
+using LocalAutomation.Runtime;
+using Serilog.Events;
 using RuntimeExecutionSession = LocalAutomation.Runtime.ExecutionSession;
 using RuntimeExecutionTask = LocalAutomation.Runtime.ExecutionTask;
 using RuntimeExecutionTaskId = LocalAutomation.Runtime.ExecutionTaskId;
@@ -216,17 +218,17 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     /// Returns the raw session-log entries visible for the current graph selection, optionally applying the tab's active
     /// severity filters.
     /// </summary>
-    public IReadOnlyList<LogEntry> GetSelectedScopedLogEntries(bool applyActiveFilters, out string logSource, out int selectedTaskCount)
+    public IReadOnlyList<LogEvent> GetSelectedScopedLogEntries(bool applyActiveFilters, out string logSource, out int selectedTaskCount)
     {
         if (Session == null)
         {
             logSource = "none";
             selectedTaskCount = 0;
-            return Array.Empty<LogEntry>();
+            return Array.Empty<LogEvent>();
         }
 
         IReadOnlyList<RuntimeExecutionTaskId> selectedTaskIds = Graph.GetSelectedLogTaskIds();
-        IReadOnlyList<LogEntry> scopedEntries = Session.Logs.GetScopedEntries(selectedTaskIds);
+        IReadOnlyList<LogEvent> scopedEntries = Session.Logs.GetScopedEvents(selectedTaskIds);
         logSource = selectedTaskIds.Count == 0 ? "session" : "selection";
         selectedTaskCount = selectedTaskIds.Count;
         if (!applyActiveFilters)
@@ -355,9 +357,10 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     /// Returns whether one raw log entry should remain visible under the global display threshold and the tab's active
     /// WARN and ERR filters.
     /// </summary>
-    private bool MatchesActiveLogFilters(LogEntry entry)
+    private bool MatchesActiveLogFilters(LogEvent entry)
     {
-        if (!ApplicationLogThresholdSettings.AllowsDisplay(entry.Verbosity))
+        Microsoft.Extensions.Logging.LogLevel logLevel = LogLevelInterop.ToMicrosoftLogLevel(entry.Level);
+        if (!ApplicationLogThresholdSettings.AllowsDisplay(logLevel))
         {
             return false;
         }
@@ -369,8 +372,8 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
             return true;
         }
 
-        bool matchesWarning = warningFilterActive && entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Warning;
-        bool matchesError = errorFilterActive && (entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Error || entry.Verbosity == Microsoft.Extensions.Logging.LogLevel.Critical);
+        bool matchesWarning = warningFilterActive && logLevel == Microsoft.Extensions.Logging.LogLevel.Warning;
+        bool matchesError = errorFilterActive && (logLevel == Microsoft.Extensions.Logging.LogLevel.Error || logLevel == Microsoft.Extensions.Logging.LogLevel.Critical);
         return matchesWarning || matchesError;
     }
 

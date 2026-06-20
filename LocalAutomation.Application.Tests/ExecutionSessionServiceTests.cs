@@ -1,8 +1,8 @@
 using System;
 using System.Threading.Tasks;
-using LocalAutomation.Core;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Events;
 using TestUtilities;
 using Xunit;
 
@@ -19,7 +19,7 @@ public sealed class ExecutionSessionServiceTests
     {
         ExecutionSessionService service = new();
         InvalidOperationException syntheticException = new("Synthetic background failure.");
-        TaskCompletionSource<LogEntry> sessionErrorSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<LogEvent> sessionErrorSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /* Inject the synthetic exception through requirements evaluation so the failure escapes ExecutionSession.Run()
            before any scheduler task-level logging can handle it. That isolates the session-service session-log path
@@ -30,9 +30,11 @@ public sealed class ExecutionSessionServiceTests
         OperationParameters parameters = operation.CreateParameters();
         parameters.Target = new ExecutionTestCommon.TestTarget();
 
-        void CaptureSessionError(LogEntry entry)
+        /* Capture the first session-scoped error event that carries the service-level background failure message. */
+        void CaptureSessionError(LogEvent entry)
         {
-            if (entry.Verbosity >= LogLevel.Error && entry.Message.Contains("Execution session", StringComparison.Ordinal))
+            string renderedMessage = entry.RenderMessage();
+            if (entry.Level >= LogEventLevel.Error && renderedMessage.Contains("Execution session", StringComparison.Ordinal))
             {
                 sessionErrorSource.TrySetResult(entry);
             }
@@ -47,15 +49,17 @@ public sealed class ExecutionSessionServiceTests
 
         try
         {
-            LogEntry entry = await sessionErrorSource.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            LogEvent entry = await sessionErrorSource.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            string renderedMessage = entry.RenderMessage();
 
-            /* The session logger stringifies the original exception into the session stream, preserving the actionable
-               failure details without routing routine execution output through the process-wide application logger. */
-            Assert.Equal(LogLevel.Error, entry.Verbosity);
-            Assert.Equal(session.Id.Value, entry.SessionId);
-            Assert.Null(entry.TaskId);
-            Assert.Contains("Execution session", entry.Message, StringComparison.Ordinal);
-            Assert.Contains("Synthetic background failure.", entry.Message, StringComparison.Ordinal);
+            /* The session logger keeps the original structured event, so the test asserts on event level, structured
+               session/task properties, and the rendered failure text seen by buffered session observers. */
+            Assert.Equal(LogEventLevel.Error, entry.Level);
+            Assert.True(entry.Properties.TryGetValue("SessionId", out LogEventPropertyValue? sessionIdProperty));
+            Assert.Equal(session.Id.Value, Assert.IsType<ScalarValue>(sessionIdProperty).Value);
+            Assert.False(entry.Properties.ContainsKey("TaskId"));
+            Assert.Contains("Execution session", renderedMessage, StringComparison.Ordinal);
+            Assert.Contains("Synthetic background failure.", renderedMessage, StringComparison.Ordinal);
         }
         finally
         {

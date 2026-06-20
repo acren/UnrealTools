@@ -49,10 +49,11 @@ public sealed class ExecutionSessionService
             throw new ArgumentNullException(nameof(operation));
         }
 
+        Serilog.ILogger sharedProcessOutputLogger = GetSharedProcessOutputLogger();
         BufferedLogStream logStream = new();
         LocalAutomation.Runtime.ExecutionPlan plan = ExecutionPlanFactory.BuildPlan(operation, parameters)
             ?? throw new InvalidOperationException($"Operation '{operation.OperationName}' did not produce an execution plan.");
-        LocalAutomation.Runtime.ExecutionSession session = new(logStream, plan, _sessionLogDirectory);
+        LocalAutomation.Runtime.ExecutionSession session = new(logStream, plan, _sessionLogDirectory, sharedProcessOutputLogger);
         ExecutionSessionLogWriter? logWriter = ExecutionSessionLogWriter.TryAttach(session);
 
         // Transfer ownership of the file writer to the background run only after all synchronous startup hooks succeed.
@@ -107,6 +108,14 @@ public sealed class ExecutionSessionService
     }
 
     /// <summary>
+    /// Gets the shared process-output logger created earlier by shell or app-facing test bootstrap.
+    /// </summary>
+    private static Serilog.ILogger GetSharedProcessOutputLogger()
+    {
+        return ProcessLoggingBootstrap.GetSharedProcessOutputLogger();
+    }
+
+    /// <summary>
     /// Runs one started session in the background so callers can receive the live session object immediately.
     /// </summary>
     private static async Task RunAsync(LocalAutomation.Runtime.ExecutionSession session, ExecutionSessionLogWriter? logWriter)
@@ -121,7 +130,7 @@ public sealed class ExecutionSessionService
             {
                 /* Background execution failures belong to the session that produced them. Logging through the session
                    logger keeps the execution tab and the per-session disk file as the durable diagnostic surfaces. */
-                session.Logger.LogError(ex, "Execution session '{SessionId}' failed for '{OperationName}'.", session.Id.Value, session.OperationName);
+                session.Logger.LogError(ex, "Execution session '{SessionId}' failed for '{OperationName}': {ExceptionMessage}", session.Id.Value, session.OperationName, ex.Message);
             }
         }
     }

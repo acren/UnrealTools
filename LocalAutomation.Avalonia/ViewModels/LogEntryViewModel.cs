@@ -1,5 +1,7 @@
 using System;
+using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Events;
 
 namespace LocalAutomation.Avalonia.ViewModels;
 
@@ -16,6 +18,14 @@ public sealed class LogEntryViewModel
         Message = message;
         Verbosity = verbosity;
         Timestamp = timestamp ?? DateTimeOffset.Now;
+    }
+
+    /// <summary>
+    /// Creates a UI log entry by projecting one raw Serilog event at the Avalonia edge.
+    /// </summary>
+    public LogEntryViewModel(LogEvent logEvent)
+        : this(RenderMessage(logEvent), LogLevelInterop.ToMicrosoftLogLevel(logEvent.Level), logEvent.Timestamp)
+    {
     }
 
     /// <summary>
@@ -67,5 +77,23 @@ public sealed class LogEntryViewModel
 
             return "#E6E6E6";
         }
+    }
+
+    /// <summary>
+    /// Renders the message text shown for one raw Serilog event.
+    /// </summary>
+    private static string RenderMessage(LogEvent logEvent)
+    {
+        ArgumentNullException.ThrowIfNull(logEvent);
+
+        string message = logEvent.RenderMessage() ?? string.Empty;
+        if (logEvent.Exception == null)
+        {
+            return message;
+        }
+
+        return string.IsNullOrWhiteSpace(message)
+            ? logEvent.Exception.ToString()
+            : message + Environment.NewLine + logEvent.Exception;
     }
 }

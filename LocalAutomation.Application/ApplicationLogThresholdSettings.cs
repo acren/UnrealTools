@@ -1,5 +1,7 @@
 using System;
+using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Events;
 
 namespace LocalAutomation.Application;
 
@@ -41,11 +43,27 @@ public static class ApplicationLogThresholdSettings
     }
 
     /// <summary>
+    /// Returns whether the provided Serilog event severity should remain visible in UI log panes.
+    /// </summary>
+    public static bool AllowsDisplay(LogEventLevel logLevel)
+    {
+        return AllowsDisplay(LogLevelInterop.ToMicrosoftLogLevel(logLevel));
+    }
+
+    /// <summary>
     /// Returns whether the provided entry severity should be written to durable log files.
     /// </summary>
     public static bool AllowsFileOutput(LogLevel logLevel)
     {
         return Normalize(logLevel) >= _fileMinimumLogLevel;
+    }
+
+    /// <summary>
+    /// Returns whether the provided Serilog event severity should be written to durable log files.
+    /// </summary>
+    public static bool AllowsFileOutput(LogEventLevel logLevel)
+    {
+        return AllowsFileOutput(LogLevelInterop.ToMicrosoftLogLevel(logLevel));
     }
 
     /// <summary>
@@ -55,4 +73,5 @@ public static class ApplicationLogThresholdSettings
     {
         return Enum.IsDefined(typeof(LogLevel), logLevel) ? logLevel : LogLevel.Trace;
     }
+
 }

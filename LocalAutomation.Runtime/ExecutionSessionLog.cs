@@ -2,18 +2,24 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using LocalAutomation.Core;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace LocalAutomation.Runtime;
 
 /// <summary>
-/// Owns buffered session-log access, per-task log fanout, and task-scoped log queries for one execution session.
+/// Owns per-session Serilog event ingress, storage, task-scoped buffered publication, and subtree scoping.
 /// </summary>
-public sealed class ExecutionSessionLog
+public sealed class ExecutionSessionLog : ILogEventSink
 {
+    private const string TaskIdPropertyName = "TaskId";
+
+    private readonly List<LogEvent> _events = new();
+    private readonly object _syncRoot = new();
     private readonly ExecutionSession _session;
 
     /// <summary>
-    /// Creates the session-log owner around one execution session and its aggregate buffered stream.
+    /// Creates the session-log owner around one execution session and its aggregate buffered event stream.
     /// </summary>
     internal ExecutionSessionLog(ExecutionSession session, ILogStream stream)
     {
@@ -22,33 +28,48 @@ public sealed class ExecutionSessionLog
     }
 
     /// <summary>
-    /// Gets the aggregate buffered log stream for the whole execution session.
+    /// Raised whenever a Serilog event is appended to this session log.
+    /// </summary>
+    public event Action<LogEvent>? EventAdded;
+
+    /// <summary>
+    /// Gets the aggregate buffered event stream for the whole execution session.
     /// </summary>
     public ILogStream Stream { get; }
 
     /// <summary>
-    /// Appends one log entry to the aggregate session stream and the matching task-scoped stream.
+    /// Gets the execution-session identifier used to route Serilog events into this session log.
     /// </summary>
-    internal void Append(LogEntry entry)
+    public ExecutionSessionId SessionId => _session.Id;
+
+    /// <summary>
+    /// Accepts one session-owned Serilog event through the direct sink ingress, mirrors it into aggregate and task-scoped
+    /// buffers, and notifies subscribers.
+    /// </summary>
+    public void Emit(LogEvent logEvent)
     {
-        if (entry == null)
+        ArgumentNullException.ThrowIfNull(logEvent);
+
+        lock (_syncRoot)
         {
-            throw new ArgumentNullException(nameof(entry));
+            _events.Add(logEvent);
         }
 
-        Stream.Add(entry);
+        Stream.Add(logEvent);
 
-        /* Session-level entries belong to the root task stream so root-scoped task views can consume the same whole-run
-           output that appears in the aggregate session stream. */
-        ExecutionTaskId? taskId = ExecutionTaskId.FromNullable(entry.TaskId);
-        ExecutionTask scopedTask = taskId == null
-            ? _session.RootTask
-            : _session.GetTask(taskId.Value);
-        scopedTask.LogStream.Add(entry);
+        /* Session-level events belong to the root task stream so root-scoped views include the same whole-run output as
+           the aggregate session stream. */
+        ExecutionTask scopedTask = TryGetTaskId(logEvent, out ExecutionTaskId taskId)
+            ? _session.GetTask(taskId)
+            : _session.RootTask;
+        scopedTask.LogStream.Add(logEvent);
+        _session.ApplyLogMetrics(logEvent);
+
+        EventAdded?.Invoke(logEvent);
     }
 
     /// <summary>
-    /// Returns the buffered direct log stream for one task when that task exists in the session.
+    /// Returns the buffered direct event stream for one task when that task exists in the session.
     /// </summary>
     public BufferedLogStream? GetTaskLogStream(ExecutionTaskId? taskId)
     {
@@ -57,47 +78,102 @@ public sealed class ExecutionSessionLog
             return null;
         }
 
-        /* Tree-walk lookup is acceptable here because task-log access is driven by UI interactions rather than the
-           scheduler hot path, so keeping the lookup localized beats maintaining a second task index for logs alone. */
         return _session.Tasks.FirstOrDefault(task => task.Id == taskId.Value)?.LogStream;
     }
 
     /// <summary>
-    /// Returns the aggregate session-log entries visible for one selected task-id set.
+    /// Clears the stored session events and the buffered task streams derived from them.
     /// </summary>
-    public IReadOnlyList<LogEntry> GetScopedEntries(IReadOnlyCollection<ExecutionTaskId> selectedTaskIds)
+    public void Clear()
     {
-        if (selectedTaskIds == null)
+        lock (_syncRoot)
         {
-            throw new ArgumentNullException(nameof(selectedTaskIds));
+            _events.Clear();
         }
 
-        List<LogEntry> sessionEntries = Stream.Entries.ToList();
+        Stream.Clear();
+        foreach (ExecutionTask task in _session.Tasks)
+        {
+            task.LogStream.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Returns Serilog events visible for one selected task-id set.
+    /// </summary>
+    public IReadOnlyList<LogEvent> GetScopedEvents(IReadOnlyCollection<ExecutionTaskId> selectedTaskIds)
+    {
+        ArgumentNullException.ThrowIfNull(selectedTaskIds);
+
+        LogEvent[] sessionEvents;
+        lock (_syncRoot)
+        {
+            sessionEvents = _events.ToArray();
+        }
+
         if (selectedTaskIds.Count == 0)
         {
-            return sessionEntries;
+            return sessionEvents;
         }
 
         HashSet<ExecutionTaskId> selectedTaskIdSet = new(selectedTaskIds);
         bool selectedScopeIncludesRoot = selectedTaskIdSet.Contains(_session.RootTask.Id);
-        return sessionEntries
-            .Where(entry =>
+        return sessionEvents
+            .Where(logEvent =>
             {
-                ExecutionTaskId? taskId = ExecutionTaskId.FromNullable(entry.TaskId);
-                // Session-level entries describe the whole run rather than one task, so only root-containing scopes include them.
-                return taskId == null
-                    ? selectedScopeIncludesRoot
-                    : selectedTaskIdSet.Contains(taskId.Value);
+                return TryGetTaskId(logEvent, out ExecutionTaskId taskId)
+                    ? selectedTaskIdSet.Contains(taskId)
+                    : selectedScopeIncludesRoot;
             })
             .ToList();
     }
 
     /// <summary>
-    /// Returns the aggregate session-log entries visible for one task subtree.
+    /// Returns Serilog events visible for one task subtree.
     /// </summary>
-    public IReadOnlyList<LogEntry> GetTaskScopedEntries(ExecutionTaskId taskId)
+    public IReadOnlyList<LogEvent> GetTaskScopedEvents(ExecutionTaskId taskId)
     {
         IReadOnlyList<ExecutionTaskId> selectedTaskIds = _session.GetTaskSubtreeIds(taskId);
-        return GetScopedEntries(selectedTaskIds);
+        return GetScopedEvents(selectedTaskIds);
     }
+
+    /// <summary>
+    /// Reads the structured task id property from one Serilog event when it is present.
+    /// </summary>
+    public static bool TryGetTaskId(LogEvent logEvent, out ExecutionTaskId taskId)
+    {
+        ArgumentNullException.ThrowIfNull(logEvent);
+
+        taskId = default;
+        if (!TryGetScalarString(logEvent, TaskIdPropertyName, out string? taskIdValue) || taskIdValue == null)
+        {
+            return false;
+        }
+
+        taskId = new ExecutionTaskId(taskIdValue);
+        return true;
+    }
+
+    /// <summary>
+    /// Reads one structured scalar string property from the event when present.
+    /// </summary>
+    internal static bool TryGetScalarString(LogEvent logEvent, string propertyName, out string? value)
+    {
+        ArgumentNullException.ThrowIfNull(logEvent);
+
+        value = null;
+        if (!logEvent.Properties.TryGetValue(propertyName, out LogEventPropertyValue? propertyValue))
+        {
+            return false;
+        }
+
+        if (propertyValue is ScalarValue { Value: string stringValue } && !string.IsNullOrWhiteSpace(stringValue))
+        {
+            value = stringValue;
+            return true;
+        }
+
+        return false;
+    }
+
 }

@@ -3,6 +3,7 @@ using System.IO;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Events;
 
 namespace LocalAutomation.Application;
 
@@ -38,7 +39,7 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
             AutoFlush = true
         };
 
-        _session.LogStream.EntryAdded += HandleEntryAdded;
+        _session.Logs.EventAdded += HandleEventAdded;
     }
 
     /// <summary>
@@ -78,7 +79,7 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     /// </summary>
     public void Dispose()
     {
-        _session.LogStream.EntryAdded -= HandleEntryAdded;
+        _session.Logs.EventAdded -= HandleEventAdded;
 
         lock (_syncRoot)
         {
@@ -93,11 +94,11 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     }
 
     /// <summary>
-    /// Writes one session log entry to disk and disables the writer after the first file I/O failure.
+    /// Writes one routed session log event to disk and disables the writer after the first file I/O failure.
     /// </summary>
-    private void HandleEntryAdded(LogEntry entry)
+    private void HandleEventAdded(LogEvent logEvent)
     {
-        // Capture the failure and report it outside the writer lock because reporting appends another session log entry.
+        // Capture the failure and report it outside the writer lock because reporting appends another session log event.
         Exception? writeFailure = null;
         lock (_syncRoot)
         {
@@ -106,15 +107,15 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
                 return;
             }
 
-            // Re-evaluate the live file threshold per entry so settings changes affect subsequent session-file output.
-            if (!ApplicationLogThresholdSettings.AllowsFileOutput(entry.Verbosity))
+            // Re-evaluate the live file threshold per event so settings changes affect subsequent session-file output.
+            if (!ApplicationLogThresholdSettings.AllowsFileOutput(logEvent.Level))
             {
                 return;
             }
 
             try
             {
-                _writer.WriteLine(FormatEntry(entry));
+                UnifiedLogTextFormatting.Format(_writer, logEvent);
             }
             catch (Exception ex) when (IsLogFileInfrastructureException(ex))
             {
@@ -136,18 +137,6 @@ internal sealed class ExecutionSessionLogWriter : IDisposable
     {
         _session.Logger.LogError(exception, "Session log file '{SessionLogFilePath}' is no longer writable. Session output will remain available in memory only.", FilePath);
         TryLogApplicationInfrastructureFailure(exception, "Session log file '{SessionLogFilePath}' is no longer writable.", FilePath);
-    }
-
-    /// <summary>
-    /// Formats a session log entry as one timestamped line while preserving any multiline exception details in the message.
-    /// </summary>
-    private static string FormatEntry(LogEntry entry)
-    {
-        // Include task identity only when the runtime attributed the line to a concrete execution task.
-        string taskSegment = string.IsNullOrWhiteSpace(entry.TaskId)
-            ? string.Empty
-            : $" [{entry.TaskId}]";
-        return $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{entry.Verbosity}]{taskSegment} {entry.Message}";
     }
 
     /// <summary>

@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
+using Serilog.Extensions.Logging;
 
 namespace LocalAutomation.Runtime;
 
@@ -19,6 +20,7 @@ namespace LocalAutomation.Runtime;
 /// </summary>
 public sealed class ExecutionSession
 {
+    private static readonly string SessionLoggerCategoryName = typeof(ExecutionSession).FullName ?? nameof(ExecutionSession);
     private readonly TaskCompletionSource<bool> _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private ExecutionTask? _rootTask;
     private readonly CancellationTokenSource _cancellationTokenSource = new();
@@ -31,7 +33,14 @@ public sealed class ExecutionSession
        write scope releases the lock. Keep those callbacks generic so any future post-write action can reuse the same
        deferral path instead of adding one-off state for each notification type. */
     private readonly List<Action> _afterGraphWriteReleasedCallbacks = new();
-    private readonly SessionLogger _sessionLogger;
+    private readonly Serilog.ILogger _sessionSerilogLogger;
+    private readonly SerilogLoggerProvider _sessionLoggerProvider;
+    private readonly ILogger _sessionLogger;
+    /* Provider-backed task loggers need their provider instances to stay alive for the same lifetime as the logger.
+       Cache one provider/logger pair per task instead of rebuilding throwaway wrapper objects every time the scheduler
+       asks for a task logger. */
+    private readonly Dictionary<ExecutionTaskId, (SerilogLoggerProvider Provider, ILogger Logger)> _taskLoggers = new();
+    private readonly object _taskLoggerSyncRoot = new();
     private Task<OperationResult>? _currentTask;
     /* Recursive write scopes are allowed, so only the outermost write-lock owner is allowed to drain the queued
        task-state notifications after releasing the graph lock. */
@@ -40,7 +49,7 @@ public sealed class ExecutionSession
     /// <summary>
     /// Creates an execution session around a shared log stream and the authored plan it will execute.
     /// </summary>
-    public ExecutionSession(ILogStream logStream, ExecutionPlan plan, string? logDirectory = null)
+    public ExecutionSession(ILogStream logStream, ExecutionPlan plan, string? logDirectory = null, Serilog.ILogger? sharedProcessOutputLogger = null)
     {
         if (logStream == null)
         {
@@ -57,7 +66,9 @@ public sealed class ExecutionSession
         TempRootPath = OutputPaths.GetSessionTempRoot(TempSlot);
         StartedAt = DateTimeOffset.Now;
         Logs = new ExecutionSessionLog(this, logStream);
-        _sessionLogger = new SessionLogger(this);
+        _sessionSerilogLogger = CreateSessionSerilogLogger(sharedProcessOutputLogger);
+        _sessionLoggerProvider = new SerilogLoggerProvider(_sessionSerilogLogger, dispose: false);
+        _sessionLogger = _sessionLoggerProvider.CreateLogger(SessionLoggerCategoryName);
 
         try
         {
@@ -154,7 +165,46 @@ public sealed class ExecutionSession
     }
 
     /// <summary>
-    /// Gets the session-scoped logger that writes into this session's buffered log streams.
+    /// Creates the session-owned Serilog branch that targets this session log directly and also forwards events to any
+    /// shared process outputs.
+    /// </summary>
+    private Serilog.ILogger CreateSessionSerilogLogger(Serilog.ILogger? sharedProcessOutputLogger)
+    {
+        Serilog.LoggerConfiguration loggerConfiguration = new Serilog.LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(Logs);
+
+        if (sharedProcessOutputLogger != null)
+        {
+            loggerConfiguration = loggerConfiguration.WriteTo.Logger(sharedProcessOutputLogger, attemptDispose: false);
+        }
+
+        return loggerConfiguration
+            .CreateLogger()
+            .ForContext("SessionId", Id.Value);
+    }
+
+    /// <summary>
+    /// Creates or reuses the provider-backed logger that should receive output for one executing task.
+    /// </summary>
+    internal ILogger CreateTaskLogger(ExecutionTaskId taskId)
+    {
+        lock (_taskLoggerSyncRoot)
+        {
+            if (_taskLoggers.TryGetValue(taskId, out (SerilogLoggerProvider Provider, ILogger Logger) entry))
+            {
+                return entry.Logger;
+            }
+
+            SerilogLoggerProvider provider = new(_sessionSerilogLogger.ForContext("TaskId", taskId.Value), dispose: false);
+            ILogger taskLogger = provider.CreateLogger(SessionLoggerCategoryName);
+            _taskLoggers.Add(taskId, (provider, taskLogger));
+            return taskLogger;
+        }
+    }
+
+    /// <summary>
+    /// Gets the session-scoped logger that enriches unified log events with this session id.
     /// </summary>
     public ILogger Logger => _sessionLogger;
 
@@ -181,7 +231,7 @@ public sealed class ExecutionSession
             Directory.Delete(outputPath, recursive: true);
         }
 
-        EventStreamLogger eventLogger = CreateAggregatingLogger();
+        ILogger eventLogger = CreateAggregatingLogger();
         string? requirementsError = operation.CheckRequirementsSatisfied(operationParameters);
         if (requirementsError != null)
         {
@@ -211,12 +261,7 @@ public sealed class ExecutionSession
         }
         catch (Exception ex)
         {
-            AddLogEntry(new LogEntry
-            {
-                SessionId = Id.Value,
-                Message = ex.ToString(),
-                Verbosity = LogLevel.Error
-            });
+            _sessionLogger.LogError(ex, "Execution session '{SessionId}' failed while running '{OperationName}': {ExceptionMessage}", Id.Value, operation.OperationName, ex.Message);
 
             /* Any fatal scheduler/session exception must leave the live graph in one coherent terminal state. Mark the
                root failed, cancel running work, and force every remaining task to a terminal outcome before the session
@@ -306,21 +351,18 @@ public sealed class ExecutionSession
     }
 
     /// <summary>
-    /// Appends one log entry to the session stream and updates the affected session/task metrics caches from that same
-    /// source event instead of rescanning buffered logs later.
+    /// Updates warning and error metrics from one projected log entry appended by the session log owner.
     /// </summary>
-    public void AddLogEntry(LogEntry entry)
+    internal void ApplyLogMetrics(Serilog.Events.LogEvent logEvent)
     {
-        if (entry == null)
-        {
-            throw new ArgumentNullException(nameof(entry));
-        }
+        ArgumentNullException.ThrowIfNull(logEvent);
 
-        Logs.Append(entry);
-        (int warningDelta, int errorDelta) = GetLogCountDeltas(entry);
-        ExecutionTaskId? taskId = ExecutionTaskId.FromNullable(entry.TaskId);
+        (int warningDelta, int errorDelta) = GetLogCountDeltas(logEvent);
+        ExecutionTaskId? taskId = ExecutionSessionLog.TryGetTaskId(logEvent, out ExecutionTaskId parsedTaskId)
+            ? parsedTaskId
+            : null;
 
-        using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ExecutionSession.AddLogEntry")
+        using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ExecutionSession.ApplyLogMetrics")
             .SetTag("task.id", taskId?.Value ?? string.Empty)
             .SetTag("warning.delta", warningDelta)
             .SetTag("error.delta", errorDelta);
@@ -966,19 +1008,11 @@ public sealed class ExecutionSession
     }
 
     /// <summary>
-    /// Creates the aggregate logger used during one top-level run so warning/error counting and task-state forwarding
-    /// continue to work while the scheduler emits task-scoped output.
+    /// Returns the session logger used during one top-level run so scheduler output enters the unified pipeline.
     /// </summary>
-    private EventStreamLogger CreateAggregatingLogger()
+    private ILogger CreateAggregatingLogger()
     {
-        return CreateAggregatingLogger(
-            _sessionLogger,
-            _sessionLogger,
-            _sessionLogger,
-            (level, output) =>
-            {
-                _sessionLogger.Log(level, output);
-            });
+        return _sessionLogger;
     }
 
     /// <summary>
@@ -1030,34 +1064,6 @@ public sealed class ExecutionSession
         {
             OutputPaths.ReleaseSessionTempSlot(TempSlot);
         }
-    }
-
-    /// <summary>
-    /// Creates an event-stream logger that forwards formatted output to the supplied sink while preserving task logging
-    /// and task-state routing when the host logger supports them.
-    /// </summary>
-    internal static EventStreamLogger CreateAggregatingLogger(ILogger fallbackLogger, IExecutionTaskLoggerFactory? taskLoggerFactory, IExecutionTaskStateSink? taskStateSink, Action<LogLevel, string>? onOutput)
-    {
-        if (fallbackLogger == null)
-        {
-            throw new ArgumentNullException(nameof(fallbackLogger));
-        }
-
-        EventStreamLogger eventLogger = new(taskLoggerFactory ?? fallbackLogger as IExecutionTaskLoggerFactory, taskStateSink ?? fallbackLogger as IExecutionTaskStateSink);
-        if (onOutput != null)
-        {
-            eventLogger.Output += (level, output) =>
-            {
-                if (output == null)
-                {
-                    throw new InvalidOperationException("Null line");
-                }
-
-                onOutput(level, output);
-            };
-        }
-
-        return eventLogger;
     }
 
     /// <summary>
@@ -1163,99 +1169,6 @@ public sealed class ExecutionSession
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Routes session and task log output into the session's buffered streams.
-    /// </summary>
-    private sealed class SessionLogger : ILogger, IExecutionTaskLoggerFactory, IExecutionTaskStateSink, IExecutionTaskScope
-    {
-        private readonly ExecutionSession _session;
-        private readonly ExecutionTaskId? _taskId;
-
-        /// <summary>
-        /// Creates one session-scoped logger around the provided session and optional task id.
-        /// </summary>
-        public SessionLogger(ExecutionSession session, ExecutionTaskId? taskId = null)
-        {
-            _session = session ?? throw new ArgumentNullException(nameof(session));
-            _taskId = taskId;
-        }
-
-        /// <summary>
-        /// Gets the current task scope carried by this logger so nested operations can inherit the same task identity.
-        /// </summary>
-        public ExecutionTaskId? CurrentTaskId => _taskId;
-
-        /// <summary>
-        /// Indicates that all log levels are enabled for the buffered execution stream.
-        /// </summary>
-        public bool IsEnabled(LogLevel logLevel)
-        {
-            return true;
-        }
-
-        /// <summary>
-        /// Returns a no-op logger scope because session log capture does not model structured scope state.
-        /// </summary>
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull
-        {
-            return NullScope.Instance;
-        }
-
-        /// <summary>
-        /// Writes one formatted log message into the session and task streams.
-        /// </summary>
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            string message = formatter(state, exception);
-            if (exception != null)
-            {
-                message += Environment.NewLine + exception;
-            }
-
-            _session.AddLogEntry(new LogEntry
-            {
-                SessionId = _session.Id.Value,
-                TaskId = _taskId?.Value,
-                Message = message,
-                Verbosity = logLevel
-            });
-        }
-
-        /// <summary>
-        /// Creates a child logger that attributes all output to the provided execution task.
-        /// </summary>
-        public ILogger CreateTaskLogger(ExecutionTaskId taskId)
-        {
-            return new SessionLogger(_session, taskId);
-        }
-
-        /// <summary>
-        /// Forwards explicit task-state transitions into the session so graph views can react without parsing log text.
-        /// </summary>
-        public void SetTaskState(ExecutionTaskId taskId, ExecutionTaskState state)
-        {
-            _session.SetTaskState(taskId, state);
-        }
-
-        /// <summary>
-        /// Provides a no-op scope object because session logging does not persist structured scope state.
-        /// </summary>
-        private sealed class NullScope : IDisposable
-        {
-            /// <summary>
-            /// Gets the shared no-op scope instance.
-            /// </summary>
-            public static NullScope Instance { get; } = new();
-
-            /// <summary>
-            /// Disposes the no-op scope.
-            /// </summary>
-            public void Dispose()
-            {
-            }
-        }
     }
 
     /// <summary>
@@ -1614,12 +1527,13 @@ public sealed class ExecutionSession
     }
 
     /// <summary>
-    /// Converts one log entry into the warning/error delta that subtree and session metrics should record.
+    /// Converts one Serilog event into the warning/error delta that subtree and session metrics should record.
     /// </summary>
-    private static (int warningDelta, int errorDelta) GetLogCountDeltas(LogEntry entry)
+    private static (int warningDelta, int errorDelta) GetLogCountDeltas(Serilog.Events.LogEvent logEvent)
     {
-        int warningDelta = entry.Verbosity == LogLevel.Warning ? 1 : 0;
-        int errorDelta = entry.Verbosity >= LogLevel.Error ? 1 : 0;
+        LogLevel logLevel = LogLevelInterop.ToMicrosoftLogLevel(logEvent.Level);
+        int warningDelta = logLevel == LogLevel.Warning ? 1 : 0;
+        int errorDelta = logLevel >= LogLevel.Error ? 1 : 0;
         return (warningDelta, errorDelta);
     }
 

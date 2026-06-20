@@ -1,25 +1,26 @@
 using System;
 using System.Collections.Generic;
+using Serilog.Events;
 
 namespace LocalAutomation.Core;
 
 /// <summary>
-/// Stores log entries in memory and notifies subscribers as new output arrives.
+/// Stores Serilog events in memory and notifies subscribers as new output arrives.
 /// </summary>
 public sealed class BufferedLogStream : ILogStream
 {
-    private readonly List<LogEntry> _entries = new();
+    private readonly List<LogEvent> _entries = new();
     private readonly object _syncRoot = new();
 
     /// <summary>
-    /// Raised whenever a new log entry is appended.
+    /// Raised whenever a new Serilog event is appended.
     /// </summary>
-    public event Action<LogEntry>? EntryAdded;
+    public event Action<LogEvent>? EntryAdded;
 
     /// <summary>
-    /// Gets the current buffered entries.
+    /// Gets the current buffered Serilog events.
     /// </summary>
-    public IReadOnlyList<LogEntry> Entries
+    public IReadOnlyList<LogEvent> Entries
     {
         get
         {
@@ -31,9 +32,9 @@ public sealed class BufferedLogStream : ILogStream
     }
 
     /// <summary>
-    /// Appends a new log entry and notifies subscribers.
+    /// Appends a new Serilog event and notifies subscribers.
     /// </summary>
-    public void Add(LogEntry entry)
+    public void Add(LogEvent entry)
     {
         lock (_syncRoot)
         {
@@ -44,7 +45,7 @@ public sealed class BufferedLogStream : ILogStream
     }
 
     /// <summary>
-    /// Clears the buffered log entries.
+    /// Clears the buffered log events.
     /// </summary>
     public void Clear()
     {

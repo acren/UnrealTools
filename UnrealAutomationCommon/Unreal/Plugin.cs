@@ -28,7 +28,7 @@ namespace UnrealAutomationCommon.Unreal
         {
             if (!PluginPaths.Instance.IsTargetDirectory(targetPath))
             {
-                AppLogger.LoggerInstance.LogError($"Package {targetPath} does not contain a .uplugin");
+                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain a .uplugin");
                 return;
             }
 
@@ -211,7 +211,7 @@ namespace UnrealAutomationCommon.Unreal
         private void RecordBackgroundException(Exception exception)
         {
             _backgroundException = exception;
-            AppLogger.LoggerInstance.LogError(exception, "Plugin background watcher failed for '{PluginPath}'.", TargetPath);
+            ApplicationLogger.Logger.LogError(exception, "Plugin background watcher failed for '{PluginPath}'.", TargetPath);
         }
 
         /// <summary>

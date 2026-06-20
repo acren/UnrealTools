@@ -176,7 +176,7 @@ public sealed class ExecutionRetryPolicy
             maxAttempts: maxAttempts,
             shouldRetry: context =>
             {
-                int[] counts = policyAttempts.Value;
+                int[]? counts = policyAttempts.Value;
                 if (counts == null)
                 {
                     counts = new int[policies.Length];

@@ -1643,7 +1643,7 @@ public class ExecutionTask : INotifyPropertyChanged
     /// Builds a human-readable task path from the current live parent chain so logs can identify this task by its visible
     /// location in the execution tree instead of only by its generated id.
     /// </summary>
-    internal string GetDisplayPath()
+    public string GetDisplayPath()
     {
         List<string> segments = new();
         ExecutionTask? currentTask = this;
