@@ -1198,10 +1198,18 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         /// </summary>
         private static void ApplyValidationLaunchFlags(global::LocalAutomation.Runtime.OperationParameters launchParameters)
         {
-            // Deploy validation launches are controlled automation runs with process-local runtime dependencies.
+            // Deploy validation launches are controlled automation runs, so Unreal messaging stays disabled.
             FlagOptions flagOptions = launchParameters.GetOptions<FlagOptions>();
             flagOptions.NoMessaging = true;
-            flagOptions.DdcForceMemoryCache = true;
+
+            // Validation launches use the installed-engine DDC graph that skips the local Zen backend so they do not
+            // restart the shared Common Zen service while package jobs are staging IoStore data.
+            AdditionalArgumentsOptions additionalArguments = launchParameters.GetOptions<AdditionalArgumentsOptions>();
+            additionalArguments.Arguments = string.Join(' ', new[]
+            {
+                additionalArguments.Arguments,
+                "-ddc=InstalledNoZenLocalFallback"
+            }.Where(argument => !string.IsNullOrWhiteSpace(argument)));
         }
 
         /// <summary>
