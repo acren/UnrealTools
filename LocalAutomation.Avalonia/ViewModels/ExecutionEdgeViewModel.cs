@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia.Media;
 using LocalAutomation.Avalonia.ExecutionGraph;
 using LocalAutomation.Core;
@@ -40,9 +41,14 @@ public sealed class ExecutionEdgeViewModel : ViewModelBase
     public (RuntimeExecutionTaskId SourceId, RuntimeExecutionTaskId TargetId) EdgeKey => (Source.Id, Target.Id);
 
     /// <summary>
+    /// Gets the immutable ordered points used by retained edge reconciliation.
+    /// </summary>
+    internal IReadOnlyList<ExecutionGraphPoint> RoutePoints => _layout.Route.Points;
+
+    /// <summary>
     /// Gets how many routed points currently define this edge geometry.
     /// </summary>
-    public int RoutePointCount => _layout.Route.Points.Count;
+    public int RoutePointCount => RoutePoints.Count;
 
     /// <summary>
     /// Materializes one shareable geometry instance for the current routed edge.

@@ -433,7 +433,7 @@ public partial class ExecutionGraphCanvas : UserControl
         }
 
         _nodeWidthUpdatePhase = NodeWidthUpdatePhase.Scheduled;
-        Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Render);
+        Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Background);
     }
 
     /// <summary>
@@ -451,7 +451,7 @@ public partial class ExecutionGraphCanvas : UserControl
         if (_observedGraph.IsUpdatingGraph)
         {
             _nodeWidthUpdatePhase = NodeWidthUpdatePhase.Scheduled;
-            Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Render);
+            Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Background);
             return;
         }
 
@@ -489,7 +489,7 @@ public partial class ExecutionGraphCanvas : UserControl
             if (_pendingNodeWidthUpdates.Count > 0)
             {
                 _nodeWidthUpdatePhase = NodeWidthUpdatePhase.Scheduled;
-                Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Render);
+                Dispatcher.UIThread.Post(FlushPendingNodeWidthUpdates, DispatcherPriority.Background);
             }
             else
             {
@@ -1129,6 +1129,7 @@ public partial class ExecutionGraphCanvas : UserControl
     /// </summary>
     private sealed class RetainedEdgeVisual : IDisposable
     {
+        private IReadOnlyList<ExecutionGraphPoint>? _routePoints;
         private ExecutionTaskViewModel? _observedTask;
         private PropertyChangedEventHandler? _taskStatusChangedHandler;
 
@@ -1155,7 +1156,7 @@ public partial class ExecutionGraphCanvas : UserControl
         public ShapePath HoverTargetPath { get; }
 
         /// <summary>
-        /// Updates the retained edge visual from the latest edge view model and one shared geometry instance.
+        /// Updates the retained edge visual, replacing shared path geometry only when the ordered route changes.
         /// </summary>
         public void Update(ExecutionEdgeViewModel edge)
         {
@@ -1164,24 +1165,22 @@ public partial class ExecutionGraphCanvas : UserControl
                 throw new ArgumentNullException(nameof(edge));
             }
 
-            /* Keep the geometry-materialization span separate from the later visual-property writes so traces can show
-               whether the retained-edge hitch comes from geometry construction or from applying that geometry to paths. */
-            Geometry sharedGeometry = edge.CreatePathGeometry();
-
-            /* DataContext writes can trigger binding churn on retained paths, so isolate them from the geometry work and
-               from the later path-data assignment. */
-            using (PerformanceActivityScope dataContextActivity = PerformanceTelemetry.StartActivity("ExecutionGraphCanvas.UpdateEdgeVisual.AssignDataContext"))
+            IReadOnlyList<ExecutionGraphPoint> routePoints = edge.RoutePoints;
+            if (_routePoints == null || !_routePoints.SequenceEqual(routePoints))
             {
-                VisiblePath.DataContext = edge;
-                HoverTargetPath.DataContext = edge;
-            }
+                /* Keep the geometry-materialization span separate from the later visual-property writes so traces can show
+                   whether the retained-edge hitch comes from geometry construction or from applying that geometry to paths. */
+                Geometry sharedGeometry = edge.CreatePathGeometry();
 
-            /* Assigning the shared geometry back onto the two ShapePath instances is the next likely UI-thread cost once
-               raw StreamGeometry construction is ruled out, so time that boundary independently. */
-            using (PerformanceActivityScope geometryAssignmentActivity = PerformanceTelemetry.StartActivity("ExecutionGraphCanvas.UpdateEdgeVisual.AssignPathData"))
-            {
-                VisiblePath.Data = sharedGeometry;
-                HoverTargetPath.Data = sharedGeometry;
+                /* Assigning the shared geometry back onto the two ShapePath instances is the next likely UI-thread cost once
+                   raw StreamGeometry construction is ruled out, so time that boundary independently. */
+                using (PerformanceActivityScope geometryAssignmentActivity = PerformanceTelemetry.StartActivity("ExecutionGraphCanvas.UpdateEdgeVisual.AssignPathData"))
+                {
+                    VisiblePath.Data = sharedGeometry;
+                    HoverTargetPath.Data = sharedGeometry;
+                }
+
+                _routePoints = routePoints;
             }
 
             /* Target-task observation can rebalance subscriptions and status classes, so measure it separately from the
