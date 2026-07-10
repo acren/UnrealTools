@@ -16,6 +16,11 @@ namespace UnrealAutomationCommon.Operations.OperationOptionTypes
         private bool runClangCompileCheck = false;
 
         [ObservableProperty]
+        [property: DisplayName("Run Data Validation")]
+        [property: Description("Runs Unreal's DataValidation commandlet against the prepared project-plugin base during deployment verification.")]
+        private bool runDataValidation = false;
+
+        [ObservableProperty]
         [property: DisplayName("Test Standalone")]
         [property: Description("Builds and validates the standalone packaged plugin output.")]
         private bool testStandalone = true;

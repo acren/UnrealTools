@@ -520,15 +520,29 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks);
                         });
 
-                /* The validation children all fan out from the shared prebuilt base, so the common dependency belongs on
-                   the validation parent group instead of being repeated on each child task. */
+                /* The commandlet and launch validation children all fan out from the shared prebuilt base, so the common
+                   dependency belongs on the validation parent group instead of being repeated on each child task. */
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder validateSharedBase = steps.Task("Validate Shared Project-Plugin Base")
-                    .Describe("Run optional launch validation branches against the shared prebuilt project-plugin base while later packaging preparation continues")
+                    .Describe("Run optional commandlet and launch validation against the shared prebuilt project-plugin base while later packaging preparation continues")
                     .After(prepareSharedBase.Id);
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder testEditor = default!;
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder testStandalone = default!;
                 validateSharedBase.Children(global::LocalAutomation.Runtime.ExecutionChildMode.Parallel, validationScope =>
                 {
+                    validationScope.AddChildOperation(
+                            "Run Data Validation",
+                            new ValidateProjectData(),
+                            () => CreateDataValidationParameters(plugin.HostProject, engine),
+                            "Run Unreal data validation against the prepared distributable project-plugin base",
+                            context =>
+                            {
+                                DeploymentWorkspaceState state = context.GetData<DeploymentWorkspaceState>();
+                                Project project = CreateRequiredProject(state.Layout.ExampleProjectBasePath, "Project-plugin base is not available for data validation");
+                                return CreateDataValidationParameters(project, state.Engine);
+                            })
+                        .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks)
+                        .When(deployOptions.RunDataValidation, "Run Data Validation is off.");
+
                     global::LocalAutomation.Runtime.ExecutionTaskBuilder queryTargets = validationScope.Task("Query Project-Plugin Base Targets")
                         .Describe("Generate Unreal target metadata before the editor validation launch so editor startup can reuse the target cache")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks
@@ -1210,6 +1224,19 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 additionalArguments.Arguments,
                 "-ddc=InstalledNoZenLocalFallback"
             }.Where(argument => !string.IsNullOrWhiteSpace(argument)));
+        }
+
+        /// <summary>
+        /// Creates fresh data-validation parameters so deploy automation-test settings cannot add test commands.
+        /// </summary>
+        private global::LocalAutomation.Runtime.OperationParameters CreateDataValidationParameters(Project project, Engine engine)
+        {
+            global::LocalAutomation.Runtime.OperationParameters parameters = CreateParameters();
+            parameters.Target = project;
+            parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { engine.Version };
+            ApplyValidationLaunchFlags(parameters);
+            parameters.GetOptions<FlagOptions>().Multiprocess = true;
+            return parameters;
         }
 
         /// <summary>
