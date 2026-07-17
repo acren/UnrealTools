@@ -1,7 +1,7 @@
 using System;
-using System.Collections.ObjectModel;
 using System.Linq;
 using LocalAutomation.Application;
+using LocalAutomation.Avalonia.Collections;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
 using Serilog.Events;
@@ -24,7 +24,10 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     private bool _isWarningLogFilterActive;
     // The active error filter belongs to this tab and represents error plus critical log entries.
     private bool _isErrorLogFilterActive;
-    private ObservableCollection<LogEntryViewModel> _selectedLogEntries = new();
+    // Tracks the raw event instances represented by the selected rows so rebuild and append paths cannot duplicate them.
+    private readonly HashSet<LogEvent> _selectedLogEvents = new(ReferenceEqualityComparer.Instance);
+    // Publishes bursty live output as one collection-add notification per dispatcher batch.
+    private RangeObservableCollection<LogEntryViewModel> _selectedLogEntries = new();
     private readonly Dictionary<RuntimeExecutionTaskId, ExecutionTaskViewModel> _tasksById = new();
 
     /// <summary>
@@ -93,7 +96,7 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
     /// <summary>
     /// Gets the log entries currently shown in the details pane for the selected graph node or current tab-wide log view.
     /// </summary>
-    public ObservableCollection<LogEntryViewModel> SelectedLogEntries
+    public RangeObservableCollection<LogEntryViewModel> SelectedLogEntries
     {
         get => _selectedLogEntries;
         private set => SetProperty(ref _selectedLogEntries, value);
@@ -207,11 +210,27 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
                     : ExecutionTaskDisplayStatus.Queued;
 
     /// <summary>
-    /// Replaces the currently displayed log entries for the selected graph node or current tab-wide log view.
+    /// Replaces the currently displayed log rows from an authoritative raw-event snapshot.
     /// </summary>
-    public void SetSelectedLogEntries(System.Collections.Generic.IEnumerable<LogEntryViewModel> entries)
+    public void SetSelectedLogEntries(IEnumerable<LogEvent> entries)
     {
-        SelectedLogEntries = new ObservableCollection<LogEntryViewModel>(entries.ToList());
+        ArgumentNullException.ThrowIfNull(entries);
+
+        _selectedLogEvents.Clear();
+        List<LogEntryViewModel> rows = CreateNewSelectedLogEntries(entries);
+        RangeObservableCollection<LogEntryViewModel> selectedLogEntries = new();
+        selectedLogEntries.AddRange(rows);
+        SelectedLogEntries = selectedLogEntries;
+    }
+
+    /// <summary>
+    /// Appends raw events that are not already represented by the selected collection.
+    /// </summary>
+    public void AppendSelectedLogEntries(IEnumerable<LogEvent> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        SelectedLogEntries.AddRange(CreateNewSelectedLogEntries(entries));
     }
 
     /// <summary>
@@ -238,6 +257,19 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
 
         return scopedEntries
             .Where(MatchesActiveLogFilters)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Filters one pending batch through the current tab source, task scope, display threshold, and severity policy.
+    /// </summary>
+    public IReadOnlyList<LogEvent> GetVisibleSelectedLogEntries(IEnumerable<LogEvent> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        IReadOnlyList<RuntimeExecutionTaskId> selectedTaskIds = Graph.GetSelectedLogTaskIds();
+        return entries
+            .Where(entry => IsSelectedLogEventVisible(entry, selectedTaskIds))
             .ToList();
     }
 
@@ -351,6 +383,41 @@ public sealed class RuntimeWorkspaceTabViewModel : ViewModelBase
         }
 
         activity.SetTag("refreshed.task.count", refreshedTaskIds.Count);
+    }
+
+    /// <summary>
+    /// Projects events not already represented by the selected collection and records their raw identities.
+    /// </summary>
+    private List<LogEntryViewModel> CreateNewSelectedLogEntries(IEnumerable<LogEvent> entries)
+    {
+        List<LogEntryViewModel> rows = new();
+        foreach (LogEvent entry in entries)
+        {
+            if (_selectedLogEvents.Contains(entry))
+            {
+                continue;
+            }
+
+            rows.Add(new LogEntryViewModel(entry));
+            _selectedLogEvents.Add(entry);
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Returns whether one pending event belongs in the selected pane under the current tab state.
+    /// </summary>
+    private bool IsSelectedLogEventVisible(LogEvent entry, IReadOnlyCollection<RuntimeExecutionTaskId> selectedTaskIds)
+    {
+        if (IsApplicationLog)
+        {
+            return ApplicationLogThresholdSettings.AllowsDisplay(LogLevelInterop.ToMicrosoftLogLevel(entry.Level));
+        }
+
+        return Session != null &&
+               MatchesActiveLogFilters(entry) &&
+               Session.Logs.IsEventInScope(entry, selectedTaskIds);
     }
 
     /// <summary>

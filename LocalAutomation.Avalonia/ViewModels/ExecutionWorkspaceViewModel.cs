@@ -40,7 +40,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     private readonly Action<string> _setStatus;
     private readonly DispatcherTimer _pendingLogFlushTimer;
     private readonly DispatcherTimer _runtimeDurationTimer;
-    private readonly Dictionary<RuntimeWorkspaceTabViewModel, Queue<LogEntryViewModel>> _pendingLogEntries = new();
+    private readonly Dictionary<RuntimeWorkspaceTabViewModel, Queue<LogEvent>> _pendingLogEntries = new();
     private readonly Dictionary<RuntimeWorkspaceTabViewModel, HashSet<RuntimeExecutionTaskId>> _pendingTaskStateChanges = new();
     private readonly HashSet<RuntimeWorkspaceTabViewModel> _taskStateFlushQueuedTabs = new();
     private readonly HashSet<RuntimeWorkspaceTabViewModel> _pendingGraphRefreshTabs = new();
@@ -800,9 +800,8 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     {
         _attachedLogStreams[runtimeTab] = logStream;
         RebuildTabSelectedLogEntries(runtimeTab);
-        // Always capture log entries regardless of tab visibility. Visibility only controls when we rebuild a tab's
-        // visible pane, never whether entries are collected into that tab's buffered source stream.
-        logStream.EntryAdded += entry => EnqueuePendingLogEntry(runtimeTab, CreateLogEntryViewModel(entry));
+        // Queue raw events for every tab so visibility can be evaluated from current UI state when the dispatcher flushes.
+        logStream.EntryAdded += entry => EnqueuePendingLogEntry(runtimeTab, entry);
     }
 
     /// <summary>
@@ -840,13 +839,12 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
 
         if (runtimeTab.IsApplicationLog)
         {
-            List<LogEvent> applicationScopedEntries = ApplicationLogService.LogStream.Entries
+            List<LogEvent> applicationEntries = ApplicationLogService.LogStream.Entries
                 .Where(entry => ApplicationLogThresholdSettings.AllowsDisplay(LogLevelInterop.ToMicrosoftLogLevel(entry.Level)))
                 .ToList();
-            List<LogEntryViewModel> applicationEntries = applicationScopedEntries.Select(CreateLogEntryViewModel).ToList();
             activity.SetTag("log.source", "application")
                 .SetTag("selected.task.count", 0)
-                .SetTag("session.entry.count", applicationScopedEntries.Count)
+                .SetTag("session.entry.count", applicationEntries.Count)
                 .SetTag("visible.entry.count", applicationEntries.Count);
             runtimeTab.SetSelectedLogEntries(applicationEntries);
             return;
@@ -858,18 +856,15 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
                 .SetTag("selected.task.count", 0)
                 .SetTag("session.entry.count", 0)
                 .SetTag("visible.entry.count", 0);
-            runtimeTab.SetSelectedLogEntries(Array.Empty<LogEntryViewModel>());
+            runtimeTab.SetSelectedLogEntries(Array.Empty<LogEvent>());
             return;
         }
 
         int sessionEntryCount = runtimeTab.Session.Logs.Stream.Entries.Count;
-        IReadOnlyList<LogEvent> visibleRawEntries = runtimeTab.GetSelectedScopedLogEntries(
+        IReadOnlyList<LogEvent> visibleEntries = runtimeTab.GetSelectedScopedLogEntries(
             applyActiveFilters: true,
             out string logSource,
             out int selectedTaskCount);
-        List<LogEntryViewModel> visibleEntries = visibleRawEntries
-            .Select(CreateLogEntryViewModel)
-            .ToList();
         activity.SetTag("log.source", logSource)
             .SetTag("selected.task.count", selectedTaskCount)
             .SetTag("session.entry.count", sessionEntryCount)
@@ -878,17 +873,16 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Buffers one pending log entry or task-log refresh so high-volume output does not schedule one dispatcher callback
-    /// per line.
+    /// Buffers one raw event so high-volume output does not schedule one dispatcher callback per line.
     /// </summary>
-    private void EnqueuePendingLogEntry(RuntimeWorkspaceTabViewModel runtimeTab, LogEntryViewModel entry)
+    private void EnqueuePendingLogEntry(RuntimeWorkspaceTabViewModel runtimeTab, LogEvent entry)
     {
         bool queueFlushStart;
         lock (_pendingLogSyncRoot)
         {
-            if (!_pendingLogEntries.TryGetValue(runtimeTab, out Queue<LogEntryViewModel>? pendingEntries))
+            if (!_pendingLogEntries.TryGetValue(runtimeTab, out Queue<LogEvent>? pendingEntries))
             {
-                pendingEntries = new Queue<LogEntryViewModel>();
+                pendingEntries = new Queue<LogEvent>();
                 _pendingLogEntries[runtimeTab] = pendingEntries;
             }
 
@@ -924,14 +918,6 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Requests a bounded refresh pass for the selected task log without needing to synthesize a fake new log line.
-    /// </summary>
-    private void EnqueueRefreshForSelection(RuntimeWorkspaceTabViewModel runtimeTab)
-    {
-        EnqueuePendingLogEntry(runtimeTab, new LogEntryViewModel(string.Empty, Microsoft.Extensions.Logging.LogLevel.Trace));
-    }
-
-    /// <summary>
     /// Drops any queued log lines for a workspace tab that is being cleared or removed.
     /// </summary>
     private void RemovePendingLogEntries(RuntimeWorkspaceTabViewModel runtimeTab)
@@ -950,32 +936,34 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Flushes pending log updates onto the selected log pane in bounded batches.
+    /// Flushes pending log updates onto the selected log pane in bounded incremental batches.
     /// </summary>
     private void HandlePendingLogFlushTimerTick(object? sender, EventArgs e)
     {
-        List<RuntimeWorkspaceTabViewModel> tabsToRefresh = DrainPendingLogEntries(out bool hasMorePendingEntries);
-        bool selectedTabChanged = false;
-        foreach (RuntimeWorkspaceTabViewModel runtimeTab in tabsToRefresh)
+        Dictionary<RuntimeWorkspaceTabViewModel, List<LogEvent>> pendingEntriesByTab = DrainPendingLogEntries(out bool hasMorePendingEntries);
+        foreach ((RuntimeWorkspaceTabViewModel runtimeTab, List<LogEvent> pendingEntries) in pendingEntriesByTab)
         {
-            // Hidden tabs still collect entries, but only the selected tab pays the cost of rebuilding its visible
-            // pane during live streaming. When a hidden tab becomes selected, the pane is rebuilt from the buffered
-            // stream so no captured output depends on prior visibility.
+            // Hidden tabs read their complete authoritative stream when selected, so their drained UI batches need no work.
             if (!ReferenceEquals(SelectedRuntimeTab, runtimeTab))
             {
                 continue;
             }
 
-            RebuildTabSelectedLogEntries(runtimeTab);
-            if (ReferenceEquals(SelectedRuntimeTab, runtimeTab))
-            {
-                selectedTabChanged = true;
-            }
-        }
+            using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ExecutionWorkspace.AppendSelectedLogEntries")
+                .SetTag("tab.id", runtimeTab.Id)
+                .SetTag("tab.title", runtimeTab.Title)
+                .SetTag("tab.kind", runtimeTab.Kind.ToString())
+                .SetTag("pending.entry.count", pendingEntries.Count);
 
-        if (selectedTabChanged)
-        {
-            RaiseSelectionStateChanged();
+            ILogStream logStream = _attachedLogStreams[runtimeTab];
+            List<LogEvent> currentEntries = pendingEntries
+                .Where(logStream.Contains)
+                .ToList();
+            IReadOnlyList<LogEvent> visibleEntries = runtimeTab.GetVisibleSelectedLogEntries(currentEntries);
+            runtimeTab.AppendSelectedLogEntries(visibleEntries);
+
+            activity.SetTag("visible.entry.count", visibleEntries.Count)
+                .SetTag("resulting.visible.entry.count", runtimeTab.SelectedLogEntries.Count);
         }
 
         if (!hasMorePendingEntries)
@@ -985,15 +973,15 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Drains a bounded number of queued updates while preserving tab-local ordering.
+    /// Drains bounded tab-local event batches while preserving each source stream's queued order.
     /// </summary>
-    private List<RuntimeWorkspaceTabViewModel> DrainPendingLogEntries(out bool hasMorePendingEntries)
+    private Dictionary<RuntimeWorkspaceTabViewModel, List<LogEvent>> DrainPendingLogEntries(out bool hasMorePendingEntries)
     {
-        List<RuntimeWorkspaceTabViewModel> tabsToRefresh = new();
+        Dictionary<RuntimeWorkspaceTabViewModel, List<LogEvent>> drainedEntries = new();
         lock (_pendingLogSyncRoot)
         {
             int remainingBudget = MaxLogEntriesPerFlush;
-            foreach ((RuntimeWorkspaceTabViewModel runtimeTab, Queue<LogEntryViewModel> pendingEntries) in _pendingLogEntries.ToList())
+            foreach ((RuntimeWorkspaceTabViewModel runtimeTab, Queue<LogEvent> pendingEntries) in _pendingLogEntries.ToList())
             {
                 if (remainingBudget == 0)
                 {
@@ -1006,12 +994,13 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
                     continue;
                 }
 
+                List<LogEvent> tabEntries = new(entriesToDrain);
                 for (int index = 0; index < entriesToDrain; index++)
                 {
-                    pendingEntries.Dequeue();
+                    tabEntries.Add(pendingEntries.Dequeue());
                 }
 
-                tabsToRefresh.Add(runtimeTab);
+                drainedEntries[runtimeTab] = tabEntries;
                 if (pendingEntries.Count == 0)
                 {
                     _pendingLogEntries.Remove(runtimeTab);
@@ -1023,7 +1012,7 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
             hasMorePendingEntries = _pendingLogEntries.Count > 0;
         }
 
-        return tabsToRefresh;
+        return drainedEntries;
     }
 
     /// <summary>
@@ -1258,14 +1247,6 @@ public sealed class ExecutionWorkspaceViewModel : ViewModelBase
         }
 
         RaiseSelectionStateChanged();
-    }
-
-    /// <summary>
-    /// Adapts one shared log entry into the UI-friendly log row model.
-    /// </summary>
-    private static LogEntryViewModel CreateLogEntryViewModel(LogEvent entry)
-    {
-        return new LogEntryViewModel(entry);
     }
 
 }

@@ -9,7 +9,11 @@ namespace LocalAutomation.Core;
 /// </summary>
 public sealed class BufferedLogStream : ILogStream
 {
+    // Preserves insertion order for snapshots consumed by full log-pane rebuilds.
     private readonly List<LogEvent> _entries = new();
+    // Provides constant-time reference membership for pending UI events that can overlap a clear.
+    private readonly HashSet<LogEvent> _entrySet = new(ReferenceEqualityComparer.Instance);
+    // Keeps ordered storage and membership synchronized as one authoritative buffer.
     private readonly object _syncRoot = new();
 
     /// <summary>
@@ -32,6 +36,17 @@ public sealed class BufferedLogStream : ILogStream
     }
 
     /// <summary>
+    /// Returns whether the exact event instance remains in the authoritative buffer.
+    /// </summary>
+    public bool Contains(LogEvent entry)
+    {
+        lock (_syncRoot)
+        {
+            return _entrySet.Contains(entry);
+        }
+    }
+
+    /// <summary>
     /// Appends a new Serilog event and notifies subscribers.
     /// </summary>
     public void Add(LogEvent entry)
@@ -39,6 +54,7 @@ public sealed class BufferedLogStream : ILogStream
         lock (_syncRoot)
         {
             _entries.Add(entry);
+            _entrySet.Add(entry);
         }
 
         EntryAdded?.Invoke(entry);
@@ -52,6 +68,7 @@ public sealed class BufferedLogStream : ILogStream
         lock (_syncRoot)
         {
             _entries.Clear();
+            _entrySet.Clear();
         }
     }
 }

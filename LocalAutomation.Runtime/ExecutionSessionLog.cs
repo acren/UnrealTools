@@ -99,6 +99,24 @@ public sealed class ExecutionSessionLog : ILogEventSink
     }
 
     /// <summary>
+    /// Returns whether one event belongs to the selected task scope, including session-level events in the root scope.
+    /// </summary>
+    public bool IsEventInScope(LogEvent logEvent, IReadOnlyCollection<ExecutionTaskId> selectedTaskIds)
+    {
+        ArgumentNullException.ThrowIfNull(logEvent);
+        ArgumentNullException.ThrowIfNull(selectedTaskIds);
+
+        if (selectedTaskIds.Count == 0)
+        {
+            return true;
+        }
+
+        return TryGetTaskId(logEvent, out ExecutionTaskId taskId)
+            ? selectedTaskIds.Contains(taskId)
+            : selectedTaskIds.Contains(_session.RootTask.Id);
+    }
+
+    /// <summary>
     /// Returns Serilog events visible for one selected task-id set.
     /// </summary>
     public IReadOnlyList<LogEvent> GetScopedEvents(IReadOnlyCollection<ExecutionTaskId> selectedTaskIds)
@@ -117,14 +135,8 @@ public sealed class ExecutionSessionLog : ILogEventSink
         }
 
         HashSet<ExecutionTaskId> selectedTaskIdSet = new(selectedTaskIds);
-        bool selectedScopeIncludesRoot = selectedTaskIdSet.Contains(_session.RootTask.Id);
         return sessionEvents
-            .Where(logEvent =>
-            {
-                return TryGetTaskId(logEvent, out ExecutionTaskId taskId)
-                    ? selectedTaskIdSet.Contains(taskId)
-                    : selectedScopeIncludesRoot;
-            })
+            .Where(logEvent => IsEventInScope(logEvent, selectedTaskIdSet))
             .ToList();
     }
 

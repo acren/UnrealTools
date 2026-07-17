@@ -20,6 +20,11 @@ public interface ILogStream
     IReadOnlyList<LogEvent> Entries { get; }
 
     /// <summary>
+    /// Returns whether the provided event remains in the authoritative buffer.
+    /// </summary>
+    bool Contains(LogEvent entry);
+
+    /// <summary>
     /// Appends a new buffered Serilog event.
     /// </summary>
     void Add(LogEvent entry);
