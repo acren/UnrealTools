@@ -516,6 +516,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                         parameters.OutputPathOverride = state.Layout.PrebuildProjectPluginBaseOutputPath;
                                         parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
                                         parameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Development;
+                                        EnableDeployBuildOptions(parameters);
                                         return parameters;
                                     })
                                 .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks);
@@ -599,6 +600,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 UbtCompilerOptions compilerOptions = parameters.GetOptions<UbtCompilerOptions>();
                                 compilerOptions.Compiler = UbtCompiler.Clang;
                                 compilerOptions.CppStandard = UbtCppStandard.Default;
+                                EnableDeployBuildOptions(parameters);
                                 return parameters;
                             })
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ClangVariantWorkspace.MutationLocks);
@@ -651,6 +653,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
                                 parameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Development;
                                 parameters.GetOptions<AdditionalArgumentsOptions>().Arguments = "-nocompileeditor";
+                                EnableDeployBuildOptions(parameters);
                                 return parameters;
                             })
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks);
@@ -714,6 +717,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
                                 parameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Development;
                                 parameters.GetOptions<AdditionalArgumentsOptions>().Arguments = "-nocompileeditor";
+                                EnableDeployBuildOptions(parameters);
                                 return parameters;
                             })
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.EnginePluginVariantWorkspace.MutationLocks);
@@ -768,6 +772,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
                                 parameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Development;
                                 parameters.GetOptions<AdditionalArgumentsOptions>().Arguments = "-nocompileeditor";
+                                EnableDeployBuildOptions(parameters);
                                 return parameters;
                             })
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks);
@@ -822,6 +827,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 parameters.GetOptions<EngineVersionOptions>().EnabledVersions = new[] { state.Engine.Version };
                                 parameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Shipping;
                                 parameters.GetOptions<AdditionalArgumentsOptions>().Arguments = "-nocompileeditor";
+                                EnableDeployBuildOptions(parameters);
                                 return parameters;
                             })
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks);
@@ -1277,6 +1283,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 parameters.GetOptions<AdditionalArgumentsOptions>().Arguments = additionalArguments;
             }
 
+            EnableDeployBuildOptions(parameters);
             return parameters;
         }
 
@@ -1296,7 +1303,16 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             UbtCompilerOptions compilerOptions = parameters.GetOptions<UbtCompilerOptions>();
             compilerOptions.Compiler = compiler;
             compilerOptions.CppStandard = UbtCppStandard.Default;
+            EnableDeployBuildOptions(parameters);
             return parameters;
+        }
+
+        /// <summary>
+        /// Enables the shared build policy required by every compilation authored by Deploy Plugin.
+        /// </summary>
+        private static void EnableDeployBuildOptions(global::LocalAutomation.Runtime.OperationParameters parameters)
+        {
+            parameters.GetOptions<BuildOptions>().NoHotReload = true;
         }
 
         /// <summary>

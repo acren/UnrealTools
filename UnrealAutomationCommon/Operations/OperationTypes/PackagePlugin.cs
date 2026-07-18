@@ -150,6 +150,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             buildPluginArguments.SetKeyPath("Package", GetOutputPath(operationParameters));
             buildPluginArguments.SetFlag("Rocket");
 
+            // UAT BuildPlugin already passes -NoHotReload to every UBT invocation it owns.
             List<string> selectedPlatforms = PluginBuildPlatformValidation.GetSelectedTargetPlatforms(pluginBuildOptions);
             buildPluginArguments.SetKeyValue("TargetPlatforms", string.Join('+', selectedPlatforms));
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LocalAutomation.Commands;
 using LocalAutomation.Runtime;
 using UnrealAutomationCommon.Operations.OperationOptionTypes;
@@ -116,6 +117,15 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
+        /// BuildCookRun operations expose build behavior for requests that include compilation.
+        /// </summary>
+        protected override IEnumerable<Type> GetDeclaredOptionSetTypes(IOperationTarget target)
+        {
+            return base.GetDeclaredOptionSetTypes(target)
+                .Concat(new[] { typeof(BuildOptions) });
+        }
+
+        /// <summary>
         /// Returns the phase request that defines one concrete BuildCookRun invocation for the current parameter state.
         /// </summary>
         protected abstract BuildCookRunProjectRequest GetBuildCookRunRequest(ValidatedOperationParameters operationParameters);
@@ -174,6 +184,13 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             arguments.SetArgument("BuildCookRun");
             arguments.SetKeyPath("project", project.UProjectPath);
             ApplyPhaseArguments(arguments, request);
+
+            // BuildCookRun forwards UBT-specific switches through its ubtargs parameter.
+            if (request.HasPhase(BuildCookRunProjectPhases.Build)
+                && operationParameters.GetOptions<BuildOptions>().NoHotReload)
+            {
+                arguments.SetKeyValue("ubtargs", "-NoHotReload");
+            }
 
             string configuration = request.Configuration.ToString();
             arguments.SetKeyValue("clientconfig", configuration);

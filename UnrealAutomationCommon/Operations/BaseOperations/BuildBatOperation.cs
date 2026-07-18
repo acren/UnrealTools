@@ -19,7 +19,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
-        /// Direct Build.bat-backed operations always expose configuration and direct-UBT compiler override options.
+        /// Direct Build.bat-backed operations expose shared build behavior, configuration, and compiler overrides.
         /// </summary>
         protected override System.Collections.Generic.IEnumerable<System.Type> GetDeclaredOptionSetTypes(global::LocalAutomation.Runtime.IOperationTarget target)
         {
@@ -27,6 +27,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 .Concat(new[]
                 {
                     typeof(BuildConfigurationOptions),
+                    typeof(BuildOptions),
                     typeof(UbtCompilerOptions)
                 });
         }
@@ -124,10 +125,17 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         // Apply the shared direct-UBT overrides only for Build.bat flows that are known to respect them.
         protected string? ApplySharedBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
         {
+            BuildOptions buildOptions = operationParameters.GetOptions<BuildOptions>();
             UbtCompilerOptions buildBatOptions = operationParameters.GetOptions<UbtCompilerOptions>();
             UbtCompiler compiler = buildBatOptions.Compiler;
             UbtCppStandard cppStandard = buildBatOptions.CppStandard;
             string? clangToolchainRoot = null;
+
+            // Automation builds can explicitly disable UnrealBuildTool hot reload.
+            if (buildOptions.NoHotReload)
+            {
+                args.SetFlag("NoHotReload");
+            }
 
             // Only emit an explicit compiler flag when the user has opted out of the engine default behavior.
             if (compiler != UbtCompiler.Default)
