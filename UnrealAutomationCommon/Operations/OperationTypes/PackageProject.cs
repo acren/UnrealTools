@@ -22,7 +22,6 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             return base.GetDeclaredOptionSetTypes(target)
                 .Concat(new[]
                 {
-                    typeof(AdditionalArgumentsOptions),
                     typeof(BuildConfigurationOptions),
                     typeof(PackageOptions),
                     typeof(CookOptions)

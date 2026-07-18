@@ -2,11 +2,10 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LocalAutomation.Runtime;
 
-namespace UnrealAutomationCommon.Operations.OperationOptionTypes;
+namespace LocalAutomation.Commands;
 
 /// <summary>
-/// Stores freeform pass-through arguments as a normal option set so newer UIs can render it through the same option
-/// pipeline as the rest of the operation configuration.
+/// Stores freeform pass-through arguments for command-backed operations.
 /// </summary>
 [PersistedSettings("additionalArguments")]
 public sealed partial class AdditionalArgumentsOptions : OperationOptions
@@ -28,5 +27,6 @@ public sealed partial class AdditionalArgumentsOptions : OperationOptions
     [ObservableProperty]
     [property: DisplayName("Arguments")]
     [property: Description("Appends raw command-line arguments after the generated automation command.")]
+    [property: PersistedValue(PersistenceScope.UserTargetOverride, "commands.additionalArguments.arguments")]
     private string arguments = string.Empty;
 }

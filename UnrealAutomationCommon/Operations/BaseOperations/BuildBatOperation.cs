@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using LocalAutomation.Commands;
 using UnrealAutomationCommon.Operations.OperationOptionTypes;
 using UnrealAutomationCommon.Unreal;
 using RuntimeTarget = LocalAutomation.Runtime.OperationTarget;
@@ -7,8 +8,16 @@ using RuntimeTarget = LocalAutomation.Runtime.OperationTarget;
 namespace UnrealAutomationCommon.Operations.BaseOperations
 {
     // Centralize the direct Build.bat wiring so all UBT-backed operations stay consistent.
-    public class BuildBatOperation<T> : CommandProcessOperation<T> where T : RuntimeTarget
+    public class BuildBatOperation<T> : UnrealOperation<T> where T : RuntimeTarget
     {
+        /// <summary>
+        /// Composes direct Build.bat execution with Unreal argument and output policy.
+        /// </summary>
+        public BuildBatOperation()
+        {
+            UseExecutionBehavior(new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance, GetExecutionRetryPolicy));
+        }
+
         /// <summary>
         /// Direct Build.bat-backed operations always expose configuration and direct-UBT compiler override options.
         /// </summary>
@@ -17,7 +26,6 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             return base.GetDeclaredOptionSetTypes(target)
                 .Concat(new[]
                 {
-                    typeof(AdditionalArgumentsOptions),
                     typeof(BuildConfigurationOptions),
                     typeof(UbtCompilerOptions)
                 });
@@ -38,7 +46,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// <summary>
         /// Direct Build.bat invocations can rerun the complete command body when UBT hits transient tool contention.
         /// </summary>
-        protected override global::LocalAutomation.Runtime.ExecutionRetryPolicy? GetExecutionRetryPolicy(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        private global::LocalAutomation.Runtime.ExecutionRetryPolicy? GetExecutionRetryPolicy(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             return UnrealBuildRetryPolicies.TransientBuildToolConflictPolicy;
         }
@@ -80,14 +88,14 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             return null;
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Arguments args = new();
 
             // Let derived operations describe the target-specific portion of the Build.bat invocation first.
             ConfigureBuildArguments(operationParameters, args);
             string? clangToolchainRoot = ApplySharedBuildArguments(operationParameters, args);
-            global::LocalAutomation.Runtime.Command command = new(GetRequiredTargetEngineInstall(operationParameters).GetBuildPath(), args.ToString());
+            Command command = new(GetRequiredTargetEngineInstall(operationParameters).GetBuildPath(), args.ToString());
             if (!string.IsNullOrWhiteSpace(clangToolchainRoot))
             {
                 // UBT reads LLVM_PATH while discovering Clang, so set it only for this Build.bat process.
@@ -97,8 +105,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             return command;
         }
 
-        // Derived operations can provide target-specific arguments, while raw Build.bat callers can rely entirely on
-        // AdditionalArgumentsOptions to supply mode-style UBT commands such as -Mode=QueryTargets.
+        // Derived operations provide the target-specific portion of the direct Build.bat invocation.
         protected virtual void ConfigureBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
         {
         }
@@ -147,7 +154,6 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 args.SetKeyValue("CppStdEngine", cppStandard.ToString());
             }
 
-            args.AddAdditionalArguments(operationParameters);
             return clangToolchainRoot;
         }
     }

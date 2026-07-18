@@ -17,10 +17,10 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 .Concat(new[] { typeof(OperationOptionTypes.BuildConfigurationOptions) });
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
-            return new global::LocalAutomation.Runtime.Command(engine.GetEditorExe(operationParameters), UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters), true).ToString());
+            return new global::LocalAutomation.Commands.Command(engine.GetEditorExe(operationParameters), UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters), true).ToString());
         }
     }
 

@@ -34,7 +34,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             return null;
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             T target = GetRequiredTarget(operationParameters);
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
@@ -44,7 +44,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             args.SetFlag("windowed");
             args.SetKeyValue("resx", "1920", false);
             args.SetKeyValue("resy", "1080", false);
-            return new global::LocalAutomation.Runtime.Command(package.ExecutablePath, args.ToString());
+            return new global::LocalAutomation.Commands.Command(package.ExecutablePath, args.ToString());
         }
 
         protected override void DescribeExecutionPlan(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.ExecutionTaskBuilder root)
@@ -84,7 +84,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 }
             }
 
-            return await ExecuteProcessAsync(context);
+            return await ExecuteCommandAsync(context);
         }
 
         protected override string GetOperationName()

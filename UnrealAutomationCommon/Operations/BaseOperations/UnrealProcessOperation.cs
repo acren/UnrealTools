@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
+using LocalAutomation.Commands;
 using Microsoft.Extensions.Logging;
 using UnrealAutomationCommon.Operations;
 using UnrealAutomationCommon.Operations.OperationOptionTypes;
@@ -8,8 +10,40 @@ using UnrealAutomationCommon.Unreal;
 namespace UnrealAutomationCommon.Operations.BaseOperations
 {
     // Operation type for running Unreal processes
-    public abstract class UnrealProcessOperation<T> : CommandProcessOperation<T> where T : global::LocalAutomation.Runtime.OperationTarget
+    public abstract class UnrealProcessOperation<T> : UnrealOperation<T> where T : global::LocalAutomation.Runtime.OperationTarget
     {
+        // The owned behavior is reused by custom Unreal launch task bodies that perform preparation before process startup.
+        private readonly CommandProcessBehavior _commandProcessBehavior;
+
+        /// <summary>
+        /// Composes Unreal process execution while retaining report processing in the Unreal hierarchy.
+        /// </summary>
+        protected UnrealProcessOperation()
+        {
+            _commandProcessBehavior = new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance, observeOutputLine: OnOutputLine, processEnded: OnProcessEnded);
+            UseExecutionBehavior(_commandProcessBehavior);
+        }
+
+        /// <summary>
+        /// Executes the composed command after operation-specific runtime preparation has completed.
+        /// </summary>
+        protected Task<global::LocalAutomation.Runtime.OperationResult> ExecuteCommandAsync(global::LocalAutomation.Runtime.ExecutionTaskContext context)
+        {
+            return _commandProcessBehavior.ExecuteAsync(context);
+        }
+
+        /// <summary>
+        /// Builds the Unreal process command for the validated operation parameters.
+        /// </summary>
+        protected abstract Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters);
+
+        /// <summary>
+        /// Lets derived Unreal process operations inspect raw stdout before classification.
+        /// </summary>
+        protected virtual void OnOutputLine(string line)
+        {
+        }
+
         /// <summary>
         /// Unreal process launches always expose tracing, flag, and automation option groups because shared argument
         /// construction reads all three when building the command line.
@@ -25,7 +59,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 });
         }
 
-        protected override void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
+        protected virtual void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
         {
             // Report test results
             AutomationOptions automationOptions = operationParameters.GetOptions<AutomationOptions>();

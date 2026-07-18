@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using LocalAutomation.Commands;
 using LocalAutomation.Runtime;
 using UnrealAutomationCommon.Operations.OperationOptionTypes;
 using UnrealAutomationCommon.Unreal;
@@ -105,8 +105,16 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
     /// Centralizes project-oriented BuildCookRun command assembly so concrete operations can differ only in which phases
     /// they run and which option groups they expose.
     /// </summary>
-    public abstract class BuildCookRunProjectOperationBase : CommandProcessOperation<Project>
+    public abstract class BuildCookRunProjectOperationBase : UnrealOperation<Project>
     {
+        /// <summary>
+        /// Composes BuildCookRun process execution with Unreal command policy and retry behavior.
+        /// </summary>
+        protected BuildCookRunProjectOperationBase()
+        {
+            UseExecutionBehavior(new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance, GetExecutionRetryPolicy));
+        }
+
         /// <summary>
         /// Returns the phase request that defines one concrete BuildCookRun invocation for the current parameter state.
         /// </summary>
@@ -136,7 +144,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// <summary>
         /// BuildCookRun can rerun the complete UAT body when setup or package phases hit transient UBT contention.
         /// </summary>
-        protected override ExecutionRetryPolicy? GetExecutionRetryPolicy(ValidatedOperationParameters operationParameters)
+        private ExecutionRetryPolicy? GetExecutionRetryPolicy(ValidatedOperationParameters operationParameters)
         {
             return UnrealBuildRetryPolicies.CombinedCookRetryPolicy;
         }
@@ -145,7 +153,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// Builds one BuildCookRun command from the shared request model so concrete operations only need to describe the
         /// enabled phases and explicit command settings, not the UAT argument plumbing.
         /// </summary>
-        protected override Command BuildCommand(ValidatedOperationParameters operationParameters)
+        private Command BuildCommand(ValidatedOperationParameters operationParameters)
         {
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             Project project = GetRequiredTarget(operationParameters);
@@ -193,7 +201,6 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             }
 
             arguments.ApplyCommonUATArguments(engine);
-            arguments.AddAdditionalArguments(operationParameters);
             return new Command(engine.GetRunUATPath(), arguments.ToString());
         }
 
@@ -244,19 +251,6 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 ? throw new ArgumentException("Operation name is required.", nameof(operationName))
                 : operationName;
             _request = request;
-        }
-
-        /// <summary>
-        /// Configurable BuildCookRun invocations only need additional argument passthrough because the preconfigured
-        /// request already carries the command settings that would otherwise come from operation-specific option sets.
-        /// </summary>
-        protected override IEnumerable<Type> GetDeclaredOptionSetTypes(IOperationTarget target)
-        {
-            return base.GetDeclaredOptionSetTypes(target)
-                .Concat(new[]
-                {
-                    typeof(AdditionalArgumentsOptions)
-                });
         }
 
         /// <summary>

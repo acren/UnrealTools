@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LocalAutomation.Core;
 
-namespace LocalAutomation.Runtime;
+namespace LocalAutomation.Commands;
 
 /// <summary>
 /// Represents a fully constructed command line that can be previewed or executed by a host runtime.

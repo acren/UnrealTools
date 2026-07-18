@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using LocalAutomation.Core;
 using Microsoft.CodeAnalysis;
 
 namespace UnrealAutomationCommon
@@ -207,10 +208,10 @@ namespace UnrealAutomationCommon
             var builtCommandString = "";
             foreach (Argument arg in _arguments)
             {
-                CommandUtils.CombineArgs(ref builtCommandString, arg.ToString());
+                CommandLineFormatting.CombineArgs(ref builtCommandString, arg.ToString());
             }
 
-            CommandUtils.CombineArgs(ref builtCommandString, _rawArgs);
+            CommandLineFormatting.CombineArgs(ref builtCommandString, _rawArgs);
             return builtCommandString;
         }
 

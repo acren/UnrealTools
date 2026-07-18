@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
+using LocalAutomation.Commands;
 using LocalAutomation.Core;
 using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
@@ -1300,7 +1301,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
 
         /// <summary>
         /// Creates the explicit package-only BuildCookRun request used by Deploy Plugin prepared-project branches. Session
-        /// staging and cook roots keep package artifacts out of persistent project workspaces while preserving build caches.
+        /// staging and cook roots keep package artifacts out of persistent project workspaces, while cooker arguments select
+        /// the installed no-Zen DDC graph used by validation processes.
         /// </summary>
         private static BuildCookRunProjectRequest CreatePreparedProjectPackageRequest(BuildConfiguration configuration, string stagingDirectory, string cookOutputDirectory, bool noDebugInfo = false)
         {
@@ -1308,6 +1310,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 BuildCookRunProjectPhases.Cook | BuildCookRunProjectPhases.Stage | BuildCookRunProjectPhases.Pak | BuildCookRunProjectPhases.Package,
                 configuration: configuration,
                 noDebugInfo: noDebugInfo,
+                additionalCookerOptions: "-ddc=InstalledNoZenLocalFallback",
                 stagingDirectory: stagingDirectory,
                 cookOutputDirectory: cookOutputDirectory);
         }
@@ -1809,8 +1812,8 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         }
 
         /// <summary>
-        /// Plugin deployment exposes engine selection, automation toggles, plugin build settings, and deployment
-        /// packaging controls so the user can configure the full archive/test flow up front.
+        /// Plugin deployment exposes engine selection, automation toggles, plugin build settings, command pass-through
+        /// arguments, and deployment packaging controls so the user can configure the full archive/test flow up front.
         /// </summary>
         protected override System.Collections.Generic.IEnumerable<System.Type> GetDeclaredOptionSetTypes(global::LocalAutomation.Runtime.IOperationTarget target)
         {
@@ -1820,6 +1823,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     typeof(EngineVersionOptions),
                     typeof(AutomationOptions),
                     typeof(PluginBuildOptions),
+                    typeof(AdditionalArgumentsOptions),
                     typeof(PluginDeployOptions)
                 });
         }

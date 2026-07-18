@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 #nullable enable
 
-namespace UnrealAutomationCommon.Operations.BaseOperations
+namespace LocalAutomation.Commands
 {
     /// <summary>
     /// Executes one command-backed task with the same logging, cancellation, and exit-code handling used by operations.
@@ -20,14 +20,18 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// </summary>
         internal static async Task<global::LocalAutomation.Runtime.OperationResult> ExecuteAsync(
             global::LocalAutomation.Runtime.ExecutionTaskContext context,
-            global::LocalAutomation.Runtime.Command command,
-            string operationTypeName,
+            Command command,
+            CommandProcessPolicy policy,
             Action<string>? onOutputLine = null)
         {
-            using global::LocalAutomation.Core.PerformanceActivityScope activity = global::LocalAutomation.Core.PerformanceTelemetry.StartActivity("CommandProcessOperation.ExecuteProcess")
+            if (policy == null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
+            using global::LocalAutomation.Core.PerformanceActivityScope activity = global::LocalAutomation.Core.PerformanceTelemetry.StartActivity("CommandProcessBehavior.ExecuteProcess")
                 .SetTag("task.id", context.TaskId.Value)
-                .SetTag("task.title", context.Title)
-                .SetTag("operation.type", operationTypeName);
+                .SetTag("task.title", context.Title);
 
             ILogger logger = context.Logger;
             CommandProcessState state = new(Path.GetFileName(command.File));
@@ -49,7 +53,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             };
             ApplyCommandEnvironment(startInfo, command.EnvironmentVariables);
 
-            using (global::LocalAutomation.Core.PerformanceActivityScope startProcessActivity = global::LocalAutomation.Core.PerformanceTelemetry.StartActivity("CommandProcessOperation.StartProcess"))
+            using (global::LocalAutomation.Core.PerformanceActivityScope startProcessActivity = global::LocalAutomation.Core.PerformanceTelemetry.StartActivity("CommandProcessBehavior.StartProcess"))
             {
                 state.Process = new Process { StartInfo = startInfo };
                 state.Process.EnableRaisingEvents = true;
@@ -57,7 +61,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
                 {
                     if (args.Data != null)
                     {
-                        HandleLogLine(logger, args.Data, onOutputLine);
+                        HandleLogLine(logger, args.Data, policy, onOutputLine);
                     }
                 };
                 state.Process.ErrorDataReceived += (_, args) =>
@@ -92,7 +96,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
 
             /* Register the live process-cancellation callback only after launch so terminate requests can report the
                concrete process identity they attempted to stop. */
-            CancellationTokenRegistration registration = context.CancellationToken.Register(() => TryTerminateProcessForCancellation(logger, state, operationTypeName));
+            CancellationTokenRegistration registration = context.CancellationToken.Register(() => TryTerminateProcessForCancellation(logger, state, context.Title));
 
             await tcs.Task.ConfigureAwait(false);
 
@@ -121,49 +125,16 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         /// <summary>
         /// Classifies one process output line and lets callers inspect stdout without storing the full process log.
         /// </summary>
-        private static void HandleLogLine(ILogger logger, string line, Action<string>? onOutputLine)
+        private static void HandleLogLine(ILogger logger, string line, CommandProcessPolicy policy, Action<string>? onOutputLine)
         {
             if (string.IsNullOrEmpty(line))
             {
                 return;
             }
 
-            // The streaming callback runs before log classification so operations can parse raw tool output.
+            // Observers receive raw stdout before policy classification so tool-specific parsers see every emitted line.
             onOutputLine?.Invoke(line);
-
-            string[] split = line.Split(new[] { ": " }, StringSplitOptions.None);
-            LogLevel level = LogLevel.Information;
-            if (split.Length > 1)
-            {
-                if (split[0] == "ERROR")
-                {
-                    // UBT emits process-level errors as "ERROR: message" lines.
-                    level = LogLevel.Error;
-                }
-                else if (split[1] == "Error")
-                {
-                    // Unreal logs category errors as "LogCategory: Error: message" lines.
-                    level = LogLevel.Error;
-                }
-                else if (split[1] == "Warning")
-                {
-                    // Unreal logs category warnings as "LogCategory: Warning: message" lines.
-                    level = LogLevel.Warning;
-                }
-            }
-
-            if (line.Contains("): error") || line.Contains(" : error ") || line.Contains("): fatal error") || line.Contains(" : fatal error"))
-            {
-                // Compiler diagnostics use file/line prefixes rather than Unreal log categories.
-                level = LogLevel.Error;
-            }
-            else if (line.Contains("): warning") || line.Contains(" : warning "))
-            {
-                // Compiler warnings should contribute to task warning counts like Unreal warning lines.
-                level = LogLevel.Warning;
-            }
-
-            logger.Log(level, line);
+            logger.Log(policy.ClassifyOutput(line), line);
         }
 
         /// <summary>
@@ -231,7 +202,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
             logger.LogWarning("Attempting to terminate process '{FileAndProcess}'{ProcessIdSuffix} because cancellation was requested.", state.FileAndProcess, FormatProcessIdSuffix(processId));
             try
             {
-                ProcessUtils.KillProcessAndChildren(process);
+                process.Kill(true);
             }
             catch (Exception ex)
             {

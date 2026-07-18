@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using LocalAutomation.Commands;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -11,10 +12,18 @@ using UnrealAutomationCommon.Unreal;
 namespace UnrealAutomationCommon.Operations.OperationTypes
 {
     [Operation(SortOrder = 9)]
-    public class PackagePlugin : CommandProcessOperation<Plugin>
+    public class PackagePlugin : UnrealOperation<Plugin>
     {
         private List<string> _requestedTargetPlatforms = new();
         private List<string> _builtTargetPlatforms = new();
+
+        /// <summary>
+        /// Composes plugin packaging with Unreal command policy and output validation callbacks.
+        /// </summary>
+        public PackagePlugin()
+        {
+            UseExecutionBehavior(new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance, observeOutputLine: OnOutputLine, processEnded: OnProcessEnded));
+        }
 
         /// <summary>
         /// Packaging a plugin always exposes the plugin platform selection options used to build the final UAT request.
@@ -22,7 +31,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         protected override System.Collections.Generic.IEnumerable<System.Type> GetDeclaredOptionSetTypes(global::LocalAutomation.Runtime.IOperationTarget target)
         {
             return base.GetDeclaredOptionSetTypes(target)
-                .Concat(new[] { typeof(AdditionalArgumentsOptions), typeof(PluginBuildOptions) });
+                .Concat(new[] { typeof(PluginBuildOptions) });
         }
 
         protected override IEnumerable<global::LocalAutomation.Runtime.ExecutionLock> GetExecutionLocks(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
@@ -57,21 +66,19 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             return PluginBuildPlatformValidation.CheckRequirementsSatisfied(operationParameters, engine);
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             // Package the plugin into a distributable output folder through UAT's BuildPlugin flow.
             PluginBuildOptions pluginBuildOptions = operationParameters.GetOptions<PluginBuildOptions>();
             Arguments buildPluginArguments = BuildPluginArguments(operationParameters, pluginBuildOptions);
             _requestedTargetPlatforms = PluginBuildPlatformValidation.GetRequestedTargetPlatforms(buildPluginArguments);
             _builtTargetPlatforms = new List<string>();
-            return new global::LocalAutomation.Runtime.Command(GetRequiredTargetEngineInstall(operationParameters).GetRunUATPath(), buildPluginArguments.ToString());
+            return new Command(GetRequiredTargetEngineInstall(operationParameters).GetRunUATPath(), buildPluginArguments.ToString());
         }
 
         // Track Unreal's reported target platform list as it streams by so we do not need to retain the full log.
-        protected override void OnOutputLine(string line)
+        private void OnOutputLine(string line)
         {
-            base.OnOutputLine(line);
-
             const string prefix = "Building plugin for target platforms:";
             int prefixIndex = line.IndexOf(prefix, StringComparison.InvariantCultureIgnoreCase);
             if (prefixIndex < 0)
@@ -91,14 +98,12 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         }
 
         // Compare Unreal's reported target platform list with what the user requested so silent skips become failures.
-        protected override void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
+        private void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
         {
             using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("PackagePlugin.OnProcessEnded")
                 .SetTag("result.outcome", result.Outcome.ToString())
                 .SetTag("result.was_cancelled", result.WasCancelled)
                 .SetTag("requested_platform.count", _requestedTargetPlatforms.Count);
-
-            base.OnProcessEnded(context, operationParameters, result);
 
             if (result.Outcome != global::LocalAutomation.Runtime.ExecutionTaskOutcome.Completed || result.WasCancelled || _requestedTargetPlatforms.Count == 0)
             {
@@ -149,7 +154,6 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             }
 
             buildPluginArguments.ApplyCommonUATArguments(GetRequiredTargetEngineInstall(operationParameters));
-            buildPluginArguments.AddAdditionalArguments(operationParameters);
             return buildPluginArguments;
         }
     }

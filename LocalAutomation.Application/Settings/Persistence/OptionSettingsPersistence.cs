@@ -197,6 +197,8 @@ internal sealed class OptionSettingsPersistence
             assemblies.Add(descriptor.TargetType.Assembly);
         }
 
+        // Command-owned option sets participate in startup key validation even though runtime has no command dependency.
+        assemblies.Add(typeof(LocalAutomation.Commands.AdditionalArgumentsOptions).Assembly);
         assemblies.Add(typeof(TargetSettings).Assembly);
         return assemblies;
     }

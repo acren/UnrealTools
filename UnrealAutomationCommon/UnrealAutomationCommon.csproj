@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\LocalAutomation.Commands\LocalAutomation.Commands.csproj" />
     <ProjectReference Include="..\LocalAutomation.Core\LocalAutomation.Core.csproj" />
     <ProjectReference Include="..\LocalAutomation.Extensions.Abstractions\LocalAutomation.Extensions.Abstractions.csproj" />
     <ProjectReference Include="..\LocalAutomation.Runtime\LocalAutomation.Runtime.csproj" />

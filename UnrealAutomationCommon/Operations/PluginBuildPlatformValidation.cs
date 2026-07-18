@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using LocalAutomation.Commands;
 using LocalAutomation.Runtime;
+using UnrealAutomationCommon.Operations.BaseOperations;
 using UnrealAutomationCommon.Operations.OperationOptionTypes;
 using UnrealAutomationCommon.Unreal;
 
@@ -41,7 +43,7 @@ namespace UnrealAutomationCommon.Operations
         {
             Arguments arguments = new();
             arguments.SetKeyValue("TargetPlatforms", string.Join('+', GetSelectedTargetPlatforms(pluginBuildOptions)));
-            arguments.AddAdditionalArguments(operationParameters);
+            UnrealCommandProcessPolicy.ApplyAdditionalArguments(arguments, operationParameters.GetOptions<AdditionalArgumentsOptions>().Arguments);
             return GetRequestedTargetPlatforms(arguments);
         }
 

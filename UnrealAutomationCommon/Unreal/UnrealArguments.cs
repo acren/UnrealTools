@@ -93,8 +93,6 @@ namespace UnrealAutomationCommon.Unreal
                 }
             }
 
-            arguments.AddAdditionalArguments(operationParameters);
-
             return arguments;
         }
     }

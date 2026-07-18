@@ -10,14 +10,12 @@ using UnrealAutomationCommon.Unreal;
 namespace UnrealAutomationCommon.Operations.BaseOperations;
 
 /// <summary>
-/// Preserves the historical Unreal base operation type name while the canonical implementation lives in the shared
-/// runtime project.
+/// Owns engine selection and validation behavior shared by every Unreal operation.
 /// </summary>
 public abstract class UnrealOperation : global::LocalAutomation.Runtime.Operation
 {
     /// <summary>
-    /// Unreal operations expose engine version selection, but they now read freeform additional arguments directly from
-    /// the shared parameter bag instead of mirroring them through a second Unreal-specific option set.
+    /// Exposes engine selection for every Unreal operation.
     /// </summary>
     protected override System.Collections.Generic.IEnumerable<System.Type> GetDeclaredOptionSetTypes(global::LocalAutomation.Runtime.IOperationTarget target)
     {
@@ -83,7 +81,7 @@ public abstract class UnrealOperation : global::LocalAutomation.Runtime.Operatio
 }
 
 /// <summary>
-/// Preserves the historical generic Unreal base operation type while using the shared runtime implementation.
+/// Adds target-typed access to shared Unreal operation behavior.
 /// </summary>
 public abstract class UnrealOperation<T> : UnrealOperation where T : global::LocalAutomation.Runtime.IOperationTarget
 {

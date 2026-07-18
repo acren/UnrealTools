@@ -1,21 +1,22 @@
-using System.Linq;
+using LocalAutomation.Commands;
 using LocalAutomation.Extensions.Abstractions;
 using UnrealAutomationCommon.Operations.BaseOperations;
-using UnrealAutomationCommon.Operations.OperationOptionTypes;
 using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon.Operations.OperationTypes
 {
     [Operation(SortOrder = 0)]
-    public class GenerateProjectFiles : CommandProcessOperation<Project>
+    public class GenerateProjectFiles : UnrealOperation<Project>
     {
-        protected override System.Collections.Generic.IEnumerable<System.Type> GetDeclaredOptionSetTypes(global::LocalAutomation.Runtime.IOperationTarget target)
+        /// <summary>
+        /// Composes project-file generation with the shared Unreal command policy.
+        /// </summary>
+        public GenerateProjectFiles()
         {
-            return base.GetDeclaredOptionSetTypes(target)
-                .Concat(new[] { typeof(AdditionalArgumentsOptions) });
+            UseExecutionBehavior(new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance));
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Project project = GetRequiredTarget(operationParameters);
             Arguments args = new();
@@ -24,8 +25,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             args.SetFlag("game");
             args.SetFlag("rocket");
             args.SetFlag("progress");
-            args.AddAdditionalArguments(operationParameters);
-            return new global::LocalAutomation.Runtime.Command(GetRequiredTargetEngineInstall(operationParameters).GetUBTExe(), args.ToString());
+            return new Command(GetRequiredTargetEngineInstall(operationParameters).GetUBTExe(), args.ToString());
         }
     }
 }

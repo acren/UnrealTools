@@ -16,10 +16,26 @@ namespace LocalAutomation.Runtime;
 /// </summary>
 public abstract class Operation
 {
+    // A single behavior may supply the operation's default execution mechanism without exposing it to runtime.
+    private IOperationExecutionBehavior? _executionBehavior;
+
     /// <summary>
     /// Gets the user-facing operation name.
     /// </summary>
     public string OperationName => GetOperationName();
+
+    /// <summary>
+    /// Registers the operation's single default execution behavior during construction.
+    /// </summary>
+    protected void UseExecutionBehavior(IOperationExecutionBehavior executionBehavior)
+    {
+        if (_executionBehavior != null)
+        {
+            throw new InvalidOperationException($"Operation '{OperationName}' already has an execution behavior.");
+        }
+
+        _executionBehavior = executionBehavior ?? throw new ArgumentNullException(nameof(executionBehavior));
+    }
 
     /// <summary>
     /// Creates a runtime operation instance for the provided type.
@@ -75,24 +91,16 @@ public abstract class Operation
     }
 
     /// <summary>
-    /// Returns the formatted command previews for the provided parameter state.
+    /// Returns generic execution previews for the provided parameter state.
     /// </summary>
-    public IEnumerable<Command> GetCommands(OperationParameters operationParameters)
+    public IReadOnlyList<string> GetPreviewTexts(OperationParameters operationParameters)
     {
-        if (!RequirementsSatisfied(operationParameters))
+        if (!RequirementsSatisfied(operationParameters) || _executionBehavior == null)
         {
-            return new List<Command>();
+            return Array.Empty<string>();
         }
 
-        return BuildCommands(ValidateParameters(operationParameters));
-    }
-
-    /// <summary>
-    /// Returns formatted command preview strings for the provided parameter state.
-    /// </summary>
-    public virtual IReadOnlyList<string> GetCommandTexts(OperationParameters operationParameters)
-    {
-        return GetCommands(operationParameters).Select(command => command.ToString()).ToList();
+        return _executionBehavior.GetPreviewTexts(ValidateParameters(operationParameters));
     }
 
     /// <summary>
@@ -156,7 +164,10 @@ public abstract class Operation
             return Array.Empty<Type>();
         }
 
+        IEnumerable<Type> behaviorOptionSetTypes = _executionBehavior?.GetRequiredOptionSetTypes(target)
+            ?? Enumerable.Empty<Type>();
         return GetDeclaredOptionSetTypes(target)
+            .Concat(behaviorOptionSetTypes)
             .Where(type => type != null)
             .Distinct()
             .ToArray();
@@ -344,15 +355,12 @@ public abstract class Operation
     /// </summary>
     protected virtual void DescribeExecutionPlan(ValidatedOperationParameters operationParameters, ExecutionTaskBuilder root)
     {
-        throw new NotSupportedException($"Operation '{OperationName}' must override {nameof(DescribeExecutionPlan)}.");
-    }
+        if (_executionBehavior == null)
+        {
+            throw new NotSupportedException($"Operation '{OperationName}' must override {nameof(DescribeExecutionPlan)} or register an execution behavior.");
+        }
 
-    /// <summary>
-    /// Builds the command list for the provided operation parameters.
-    /// </summary>
-    protected virtual IEnumerable<Command> BuildCommands(ValidatedOperationParameters operationParameters)
-    {
-        return Enumerable.Empty<Command>();
+        _executionBehavior.DescribeExecutionPlan(operationParameters, root);
     }
 
     /// <summary>

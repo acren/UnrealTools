@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
+using LocalAutomation.Commands;
 using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
 using Microsoft.Extensions.Logging;

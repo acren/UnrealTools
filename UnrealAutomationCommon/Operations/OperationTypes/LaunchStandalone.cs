@@ -17,7 +17,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 .Concat(new[] { typeof(OperationOptionTypes.BuildConfigurationOptions) });
         }
 
-        protected override global::LocalAutomation.Runtime.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Arguments args = UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters), true);
             args.SetFlag("game");
@@ -25,7 +25,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             args.SetKeyValue("resx", "1920", false);
             args.SetKeyValue("resy", "1080", false);
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
-            return new global::LocalAutomation.Runtime.Command(engine.GetEditorExe(operationParameters), args.ToString());
+            return new global::LocalAutomation.Commands.Command(engine.GetEditorExe(operationParameters), args.ToString());
         }
     }
 }

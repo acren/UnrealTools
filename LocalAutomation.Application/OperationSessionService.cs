@@ -192,8 +192,8 @@ public sealed class OperationSessionService
 
         try
         {
-            IReadOnlyList<string> commandTexts = operation.GetCommandTexts(parameters);
-            return commandTexts.Count > 0 ? string.Join("\n", commandTexts) : "No command";
+            IReadOnlyList<string> previewTexts = operation.GetPreviewTexts(parameters);
+            return previewTexts.Count > 0 ? string.Join("\n", previewTexts) : "No command";
         }
         catch (Exception ex)
         {
@@ -214,7 +214,7 @@ public sealed class OperationSessionService
 
         try
         {
-            return operation.GetCommandTexts(parameters).FirstOrDefault();
+            return operation.GetPreviewTexts(parameters).FirstOrDefault();
         }
         catch (Exception ex)
         {

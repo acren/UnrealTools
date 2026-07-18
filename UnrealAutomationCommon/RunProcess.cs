@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using UnrealAutomationCommon.Unreal;
@@ -22,39 +21,20 @@ namespace UnrealAutomationCommon
                 throw new ArgumentNullException(nameof(File));
             }
 
-            ProcessStartInfo startInfo = CreateProcessStartInfo(File, Args, Array.Empty<KeyValuePair<string, string>>());
+            ProcessStartInfo startInfo = CreateProcessStartInfo(File, Args);
 
             return Run(startInfo);
         }
 
-        // Runs a fully composed runtime command, including any child-process environment overrides.
-        public static Process Run(LocalAutomation.Runtime.Command command)
+        // Creates the process-start configuration used by plain command-line launch helpers.
+        private static ProcessStartInfo CreateProcessStartInfo(string file, string args)
         {
-            ProcessStartInfo startInfo = CreateProcessStartInfo(command.File, command.Arguments, command.EnvironmentVariables);
-            return Run(startInfo);
-        }
-
-        // Creates the process-start configuration used by both plain and command-backed launch helpers.
-        private static ProcessStartInfo CreateProcessStartInfo(string file, string args, IEnumerable<KeyValuePair<string, string>> environmentVariables)
-        {
-            ProcessStartInfo startInfo = new()
+            return new ProcessStartInfo
             {
                 Arguments = args,
                 FileName = file,
                 UseShellExecute = false
             };
-
-            foreach (KeyValuePair<string, string> environmentVariable in environmentVariables)
-            {
-                if (string.IsNullOrWhiteSpace(environmentVariable.Key))
-                {
-                    throw new InvalidOperationException("Command environment variable names must not be blank.");
-                }
-
-                startInfo.Environment[environmentVariable.Key] = environmentVariable.Value;
-            }
-
-            return startInfo;
         }
 
         public static Process RunAndWait(string File, string Args)
