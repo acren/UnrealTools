@@ -142,11 +142,22 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
-        /// BuildCookRun can rerun the complete UAT body when setup or package phases hit transient UBT contention.
+        /// Selects retryable failure classes from the build and cook phases enabled on this aggregate UAT task.
         /// </summary>
         private ExecutionRetryPolicy? GetExecutionRetryPolicy(ValidatedOperationParameters operationParameters)
         {
-            return UnrealBuildRetryPolicies.CombinedCookRetryPolicy;
+            BuildCookRunProjectRequest request = GetBuildCookRunRequest(operationParameters);
+            bool builds = request.HasPhase(BuildCookRunProjectPhases.Build);
+            bool cooks = request.HasPhase(BuildCookRunProjectPhases.Cook);
+
+            // Compiler crashes belong only to the phase that launches that compiler.
+            return (builds, cooks) switch
+            {
+                (true, true) => UnrealBuildRetryPolicies.BuildAndCook,
+                (true, false) => UnrealBuildRetryPolicies.Build,
+                (false, true) => UnrealBuildRetryPolicies.Cook,
+                _ => BuildToolConflictRetryPolicy.Instance
+            };
         }
 
         /// <summary>

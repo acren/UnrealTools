@@ -22,7 +22,12 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
         /// </summary>
         public PackagePlugin()
         {
-            UseExecutionBehavior(new CommandProcessBehavior(BuildCommand, UnrealCommandProcessPolicy.Instance, observeOutputLine: OnOutputLine, processEnded: OnProcessEnded));
+            UseExecutionBehavior(new CommandProcessBehavior(
+                BuildCommand,
+                UnrealCommandProcessPolicy.Instance,
+                resolveRetryPolicy: _ => UnrealBuildRetryPolicies.Build,
+                observeOutputLine: OnOutputLine,
+                processEnded: OnProcessEnded));
         }
 
         /// <summary>

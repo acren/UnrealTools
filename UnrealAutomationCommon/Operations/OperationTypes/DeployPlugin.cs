@@ -401,7 +401,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 PluginBuildOptions pluginBuildOptions = operationParameters.GetOptions<PluginBuildOptions>();
                 prepareWorkspace = steps.Task("Prepare Workspace")
                     .Describe("Create the isolated engine-specific workspace from the prepared source")
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(PrepareStepAsync);
 
                 pluginArtifactsFlow = steps.Task("Plugin Packaging")
@@ -412,13 +412,13 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     stagePlugin = pluginArtifactScope.Task("Stage Plugin")
                         .Describe("Create the staged plugin copy and persistent UAT BuildPlugin package input used for packaging and archiving")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.DistributablePluginPackageWorkspace.MutationLocks)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(StagingStepAsync);
 
                     global::LocalAutomation.Runtime.ExecutionTaskBuilder removeExistingEnginePluginInstall = pluginArtifactScope.Task("Remove Existing Engine Plugin Install")
                         .Describe("Delete stale engine-installed plugin files before UBT scans plugin descriptors for distributable packaging")
                         .WithExecutionLocks(UnrealExecutionLocks.GlobalBuild)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(RemoveExistingEnginePluginInstallAsync);
 
                     strictIncludeValidation = pluginArtifactScope.AddChildOperation(
@@ -471,13 +471,13 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     pluginArtifactScope.Task("Archive Staged Plugin Source")
                         .Describe("Archive the staged source-style plugin payload as soon as the staging copy is ready")
                         .After(stagePlugin.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(ArchivePluginSourceAsync);
 
                     pluginArtifactScope.Task("Archive Distributable Plugin")
                         .Describe("Archive the packaged distributable plugin payload as soon as the built plugin output is ready")
                         .After(packagePluginArtifact.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(ArchivePluginBuildAsync);
                 });
 
@@ -492,14 +492,14 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                             materializeProjectPluginBase = sharedBaseScope.Task("Materialize Project-Plugin Base")
                                 .Describe("Copy the shared code example base from the workspace project before the built plugin is installed into it")
                                 .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks)
-                                .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                                .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                                 .Run(MaterializeProjectPluginBaseAsync);
 
                             installProjectPluginBase = sharedBaseScope.Task("Install Distributable Plugin Into Project-Plugin Base")
                                     .Describe("Copy the built distributable plugin into the shared project-plugin base before downstream package variants clone it")
                                     .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ExampleProjectBaseWorkspace.MutationLocks)
                                     .After(materializeProjectPluginBase.Id, packagePluginArtifact.Id)
-                                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                                     .Run(InstallDistributablePluginIntoProjectPluginBaseAsync);
 
                             buildExampleBase = sharedBaseScope.AddChildOperation(
@@ -578,7 +578,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     prepareClangVariant = clangScope.Task("Prepare Clang Validation Variant")
                         .Describe("Clone the prebuilt project-plugin base for the optional Clang validation branch")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.ClangVariantWorkspace.MutationLocks)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PrepareClangVariantAsync);
 
                     clangCheck = clangScope.AddChildOperation(
@@ -616,13 +616,13 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     prepareEngineVariant = variantScope.Task("Prepare Engine-Plugin Variant")
                         .Describe("Clone the prebuilt project-plugin base and remove the project-level plugin so packaging resolves the built plugin from the engine install")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.EnginePluginVariantWorkspace.MutationLocks)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PrepareEnginePluginVariantAsync);
 
                     prepareBlueprintDemoVariant = variantScope.Task("Prepare Blueprint And Demo Variant")
                         .Describe("Clone the prebuilt project-plugin base, remove the project-level plugin, convert to blueprint-only, and prune plugins for blueprint and demo packaging")
                         .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PrepareBlueprintDemoVariantAsync);
                 });
 
@@ -664,7 +664,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Append(UnrealExecutionLocks.GetAutomationToolLock(state.Engine));
                         })
                         .After(buildProjectPluginPackageTarget.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PackageProjectPluginExampleAsync);
 
                     testProjectPlugin = flowScope.Task("Test Project-Plugin Example")
@@ -679,7 +679,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder installEnginePlugin = steps.Task("Install Built Plugin To Engine")
                     .Describe("Install the built plugin into the engine marketplace folder once the project-plugin example package is sealed")
                     .After(packageProjectPlugin.Id)
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(InstallBuiltPluginToEngineAsync);
 
                 /* This lightweight launch validates the engine-installed plugin in a generated project with no project
@@ -688,7 +688,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     .Describe("Launch and validate a generated empty project that enables the built plugin only from the engine install")
                     .After(installEnginePlugin.Id)
                     .When(automationOptions.RunTests && deployOptions.TestPackageWithEnginePlugin, automationOptions.RunTests ? "Test Package With Engine Plugin is off." : "Run Tests is off.")
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(context => TestEmptyEnginePluginProjectAsync(context, automationOptions));
 
                 global::LocalAutomation.Runtime.ExecutionTaskBuilder enginePluginFlow = steps.Task("Engine-Plugin Package")
@@ -727,7 +727,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Append(UnrealExecutionLocks.GetAutomationToolLock(state.Engine));
                         })
                         .After(buildEnginePluginPackageTarget.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PackageEnginePluginExampleAsync);
 
                     testEnginePlugin = flowScope.Task("Test Engine-Plugin Example")
@@ -781,7 +781,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Append(UnrealExecutionLocks.GetAutomationToolLock(state.Engine));
                         })
                         .After(buildBlueprintPackageTarget.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PackageBlueprintOnlyExampleAsync);
                 });
 
@@ -793,7 +793,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks)
                     .After(packageBlueprint.Id)
                     .When(automationOptions.RunTests && deployOptions.TestPackageWithEnginePlugin, automationOptions.RunTests ? "Test Package With Engine Plugin is off." : "Run Tests is off.")
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(CopyBlueprintPackageForTestAsync);
 
                 testBlueprint = steps.Task("Test Blueprint-Only Example")
@@ -835,7 +835,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                                 .Append(UnrealExecutionLocks.GetAutomationToolLock(state.Engine));
                         })
                         .After(copyBlueprintPackageForTest.Id)
-                        .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                        .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                         .Run(PackageDemoExecutableAsync);
                 });
 
@@ -843,14 +843,14 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
                     .Describe("Archive the example-project payload from a dedicated archive copy once the blueprint and demo variant is prepared")
                     .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks)
                     .After(prepareBlueprintDemoVariant.Id)
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(ArchiveExampleProjectAsync);
 
                 steps.Task("Archive Demo Executable")
                     .Describe("Archive the packaged demo executable as soon as the demo output exists")
                     .WithExecutionLocks(context => context.GetData<DeploymentWorkspaceState>().Layout.BlueprintDemoVariantWorkspace.MutationLocks)
                     .After(packageDemo.Id)
-                    .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                    .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                     .Run(ArchiveDemoPackageAsync);
 
             });
@@ -1730,7 +1730,7 @@ namespace UnrealAutomationCommon.Operations.OperationTypes
             /* Shared source preparation is an authored deploy step rather than an implicit callback on the root so it
                stays visible in the graph and remains the explicit predecessor of the per-engine branches. */
             root.Child("Prepare Shared Source", "Apply shared source-tree mutations once before engine-specific workspaces are created")
-                .WithRetry(UnrealBuildRetryPolicies.TransientWorkspaceFileLockPolicy)
+                .WithRetry(WorkspaceFileLockRetryPolicy.Instance)
                 .Run(PrepareSharedSourceAsync);
 
             root.Children(global::LocalAutomation.Runtime.ExecutionChildMode.Parallel, engines =>
