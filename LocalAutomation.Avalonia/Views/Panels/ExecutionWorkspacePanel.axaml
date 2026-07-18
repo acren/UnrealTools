@@ -156,13 +156,17 @@
                         Background="{DynamicResource GraphiteTerminalBrush}">
                     <Border.ContextMenu>
                         <ContextMenu>
+                            <MenuItem Header="Go to task"
+                                      IsEnabled="False"
+                                      Click="GoToTask_Click" />
                             <MenuItem Header="Clear"
                                       Click="ClearLog_Click" />
                         </ContextMenu>
                     </Border.ContextMenu>
                     <controls:LogViewer Margin="12,10,12,12"
                                         Entries="{Binding SelectedRuntimeLogEntries}"
-                                        SourceKey="{Binding SelectedRuntimeLogSourceId}" />
+                                        SourceKey="{Binding SelectedRuntimeLogSourceId}"
+                                        ContextRequested="LogViewer_ContextRequested" />
                 </Border>
             </Grid>
         </Grid>

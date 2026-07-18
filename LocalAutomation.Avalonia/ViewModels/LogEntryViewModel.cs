@@ -26,7 +26,15 @@ public sealed class LogEntryViewModel
     public LogEntryViewModel(LogEvent logEvent)
         : this(RenderMessage(logEvent), LogLevelInterop.ToMicrosoftLogLevel(logEvent.Level), logEvent.Timestamp)
     {
+        ExecutionTaskId = ExecutionSessionLog.TryGetTaskId(logEvent, out ExecutionTaskId taskId)
+            ? taskId
+            : null;
     }
+
+    /// <summary>
+    /// Gets the execution task that emitted this row when the source event belongs to a task.
+    /// </summary>
+    public ExecutionTaskId? ExecutionTaskId { get; }
 
     /// <summary>
     /// Gets the formatted message text.

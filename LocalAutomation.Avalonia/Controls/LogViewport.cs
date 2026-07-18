@@ -484,6 +484,15 @@ public sealed class LogViewport : Control
     }
 
     /// <summary>
+    /// Returns the rendered log entry under one viewport-relative point.
+    /// </summary>
+    internal LogEntryViewModel? GetEntryAtPoint(Point point)
+    {
+        int? rowIndex = GetRowIndexAtPoint(point);
+        return rowIndex == null ? null : _entries?[rowIndex.Value];
+    }
+
+    /// <summary>
     /// Maps a viewport-relative pointer position to the logical row index under that point.
     /// </summary>
     private int? GetRowIndexAtPoint(Point point)

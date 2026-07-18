@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -17,9 +18,15 @@ namespace LocalAutomation.Avalonia.Views.Panels;
 public partial class ExecutionWorkspacePanel : UserControl
 {
     private readonly ExecutionGraphNodeContextMenuController _graphNodeContextMenuController;
+    // Applies graph-owned viewport framing after successful log task navigation.
+    private ExecutionGraphCanvas _executionGraphCanvas = null!;
     private Border? _graphHost;
     private GridSplitter? _graphLogSplitter;
     private Border? _logHost;
+    // Holds only the row targeted by the active log context request.
+    private LogEntryViewModel? _contextLogEntry;
+    // Provides direct access to the task action whose availability follows the targeted row.
+    private MenuItem _goToTaskMenuItem = null!;
     private ExecutionWorkspaceViewModel? _observedViewModel;
 
     /// <summary>
@@ -124,6 +131,40 @@ public partial class ExecutionWorkspacePanel : UserControl
     private async void Terminate_Click(object? sender, RoutedEventArgs e)
     {
         await ViewModel.CancelExecutionAsync();
+    }
+
+    /// <summary>
+    /// Captures the rendered row under a native log context request and updates task-navigation availability.
+    /// </summary>
+    private void LogViewer_ContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        _contextLogEntry = e.Source is LogViewport viewport && e.TryGetPosition(viewport, out Point point)
+            ? viewport.GetEntryAtPoint(point)
+            : null;
+        _goToTaskMenuItem.IsEnabled = _contextLogEntry?.ExecutionTaskId != null &&
+            ViewModel.SelectedRuntimeTab?.Session != null;
+    }
+
+    /// <summary>
+    /// Selects and frames the task associated with the targeted log row through the current graph owners.
+    /// </summary>
+    private void GoToTask_Click(object? sender, RoutedEventArgs e)
+    {
+        RuntimeWorkspaceTabViewModel? runtimeTab = ViewModel.SelectedRuntimeTab;
+        /* Task identity and visible-ancestor resolution complete before any camera state changes, so stale navigation
+           leaves both selection and the viewport untouched. */
+        if (_contextLogEntry?.ExecutionTaskId is not { } taskId || runtimeTab?.Session == null ||
+            !runtimeTab.Graph.TrySelectTask(taskId))
+        {
+            ViewModel.SetStatus("Task is unavailable.");
+            return;
+        }
+
+        // The canvas derives framing entirely from its selected node and laid-out viewport state.
+        if (!_executionGraphCanvas.TryFrameSelectedNode())
+        {
+            ViewModel.SetStatus("Graph viewport is unavailable.");
+        }
     }
 
     /// <summary>
@@ -262,12 +303,15 @@ public partial class ExecutionWorkspacePanel : UserControl
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
-        ExecutionGraphCanvas executionGraphCanvas = this.FindControl<ExecutionGraphCanvas>("ExecutionGraphCanvas")
+        _executionGraphCanvas = this.FindControl<ExecutionGraphCanvas>("ExecutionGraphCanvas")
             ?? throw new InvalidOperationException($"{nameof(ExecutionWorkspacePanel)} requires the ExecutionGraphCanvas control.");
-        executionGraphCanvas.SetNodeContextMenuController(_graphNodeContextMenuController);
+        _executionGraphCanvas.SetNodeContextMenuController(_graphNodeContextMenuController);
         _graphHost = this.FindControl<Border>("GraphHost");
         _graphLogSplitter = this.FindControl<GridSplitter>("GraphLogSplitter");
-        _logHost = this.FindControl<Border>("LogHost");
+        _logHost = this.FindControl<Border>("LogHost")
+            ?? throw new InvalidOperationException($"{nameof(ExecutionWorkspacePanel)} requires the LogHost control.");
+        _goToTaskMenuItem = _logHost.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault()
+            ?? throw new InvalidOperationException($"{nameof(ExecutionWorkspacePanel)} requires the Go to task context action.");
     }
 
 }

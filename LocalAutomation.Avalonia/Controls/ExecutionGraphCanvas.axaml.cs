@@ -102,6 +102,38 @@ public partial class ExecutionGraphCanvas : UserControl
     }
 
     /// <summary>
+    /// Centers the selected visible node at a comfortable zoom when the graph and viewport have completed layout.
+    /// </summary>
+    internal bool TryFrameSelectedNode()
+    {
+        if (_observedGraph?.SelectedNode is not { } selectedNode ||
+            !TryGetViewportMetrics(out ViewportMetrics metrics))
+        {
+            return false;
+        }
+
+        /* Raise distant nodes to a readable scale, preserve a closer user zoom while the complete node fits, and reduce
+           zoom only when an oversized selected group requires more viewport space. */
+        double nodeFitZoom = Math.Min(
+            metrics.AvailableWidth / Math.Max(1, selectedNode.Width),
+            metrics.AvailableHeight / Math.Max(1, selectedNode.Height));
+        double comfortableZoom = Math.Max(_zoom, DefaultZoom);
+        _zoom = Math.Clamp(Math.Min(nodeFitZoom, comfortableZoom), MinZoom, MaxZoom);
+
+        double nodeCenterX = selectedNode.X + (selectedNode.Width / 2.0);
+        double nodeCenterY = selectedNode.Y + (selectedNode.Height / 2.0);
+        _panX = (metrics.ViewportWidth / 2.0) - (nodeCenterX * _zoom);
+        _panY = (metrics.ViewportHeight / 2.0) - (nodeCenterY * _zoom);
+
+        /* Explicit navigation owns this transform, so a queued first-fit or tab-recovery pass must not replace it on the
+           next layout callback. */
+        _hasViewportState = true;
+        _pendingViewportAdjustment = false;
+        ApplyViewportTransform();
+        return true;
+    }
+
+    /// <summary>
     /// Selects the clicked graph node inside the current graph view model.
     /// </summary>
     private void ExecutionNode_Click(object? sender, RoutedEventArgs e)

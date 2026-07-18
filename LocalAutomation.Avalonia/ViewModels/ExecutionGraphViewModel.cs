@@ -212,6 +212,21 @@ public sealed class ExecutionGraphViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Selects the requested task or its nearest visible ancestor when the current projection contains either node.
+    /// </summary>
+    public bool TrySelectTask(RuntimeExecutionTaskId taskId)
+    {
+        RuntimeExecutionTaskId? visibleTaskId = _projection.ResolveVisibleSelectionId(taskId);
+        if (visibleTaskId == null || !_nodesById.TryGetValue(visibleTaskId.Value, out ExecutionNodeViewModel? node))
+        {
+            return false;
+        }
+
+        SelectNode(node);
+        return true;
+    }
+
+    /// <summary>
     /// Attaches the shared Avalonia task view-model registry that graph nodes should wrap instead of constructing local copies.
     /// </summary>
     public void AttachTasks(IReadOnlyDictionary<RuntimeExecutionTaskId, ExecutionTaskViewModel> tasksById)
