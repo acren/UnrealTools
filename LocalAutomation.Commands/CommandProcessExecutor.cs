@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,39 @@ namespace LocalAutomation.Commands
     /// </summary>
     internal static class CommandProcessExecutor
     {
+        // System-level critical errors must return to unattended command trees instead of opening modal prompts.
+        private const uint SemFailCriticalErrors = 0x0001;
+
+        // Unhandled child-process faults must terminate so their nonzero exit codes can reach the operation runtime.
+        private const uint SemNoGpFaultErrorBox = 0x0002;
+
+        /// <summary>
+        /// Configures the Windows process policy inherited by every command descendant.
+        /// </summary>
+        static CommandProcessExecutor()
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return;
+            }
+
+            // Preserve host policies while preventing descendant failures from waiting for interactive Windows UI.
+            uint currentErrorMode = GetErrorMode();
+            SetErrorMode(currentErrorMode | SemFailCriticalErrors | SemNoGpFaultErrorBox);
+        }
+
+        /// <summary>
+        /// Reads the process-wide Windows error policy so unrelated flags remain enabled.
+        /// </summary>
+        [DllImport("kernel32.dll")]
+        private static extern uint GetErrorMode();
+
+        /// <summary>
+        /// Sets the process-wide Windows error policy inherited by child processes.
+        /// </summary>
+        [DllImport("kernel32.dll")]
+        private static extern uint SetErrorMode(uint errorMode);
+
         /// <summary>
         /// Runs the supplied command as the body of the current execution task and returns the process result.
         /// </summary>
