@@ -8,12 +8,12 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
     internal static class UnrealBuildRetryPolicies
     {
         internal static ExecutionRetryPolicy Build { get; } =
-            ExecutionRetryPolicy.Or(BuildToolConflictRetryPolicy.Instance, ClangFrontendCrashRetryPolicy.Instance);
+            ExecutionRetryPolicy.Or(BuildToolConflictRetryPolicy.Instance, CppCompilerCrashRetryPolicy.Instance);
 
         internal static ExecutionRetryPolicy Cook { get; } =
             ExecutionRetryPolicy.Or(BuildToolConflictRetryPolicy.Instance, ShaderCompilerCrashRetryPolicy.Instance);
 
         internal static ExecutionRetryPolicy BuildAndCook { get; } =
-            ExecutionRetryPolicy.Or(BuildToolConflictRetryPolicy.Instance, ClangFrontendCrashRetryPolicy.Instance, ShaderCompilerCrashRetryPolicy.Instance);
+            ExecutionRetryPolicy.Or(BuildToolConflictRetryPolicy.Instance, CppCompilerCrashRetryPolicy.Instance, ShaderCompilerCrashRetryPolicy.Instance);
     }
 }

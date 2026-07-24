@@ -45,7 +45,7 @@ namespace UnrealAutomationCommon.Operations.BaseOperations
         }
 
         /// <summary>
-        /// Direct Build.bat invocations can rerun the complete command body after build-tool contention or a Clang frontend crash.
+        /// Direct Build.bat invocations can rerun the complete command body after build-tool contention or a C++ compiler crash.
         /// </summary>
         private global::LocalAutomation.Runtime.ExecutionRetryPolicy? GetExecutionRetryPolicy(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
