@@ -1,24 +1,27 @@
 using System;
 using System.IO;
-using LocalAutomation.Extensions.Abstractions;
-using LocalAutomation.Runtime;
 using Newtonsoft.Json;
 using Semver;
-using UnrealAutomationCommon.Operations;
 
 namespace UnrealAutomationCommon.Unreal
 {
     [JsonObject(MemberSerialization.OptIn)]
-    [Target]
-    public class Engine : OperationTarget, IEngineInstanceProvider
+    public class Engine : IEngineInstanceProvider
     {
+        /// <summary>Gets the installation directory used by engine path calculations.</summary>
+        [JsonProperty]
+        public string TargetPath { get; }
+
         [JsonProperty]
         public string Key { get; set; } = string.Empty;
 
         public bool IsSourceBuild { get; private set; }
 
-        public override string Name => $"{Version} {EngineType}";
-        public override string DisplayName => Name;
+        public string Name => $"{Version} {EngineType}";
+        public string DisplayName => Name;
+
+        /// <summary>Gets whether the installation contains an editor executable.</summary>
+        public bool IsValid => EnginePaths.Instance.IsTargetDirectory(TargetPath);
 
         public string EngineType => IsSourceBuild ? "Source" : "Launcher";
 
@@ -30,6 +33,7 @@ namespace UnrealAutomationCommon.Unreal
 
         public string PluginsPath => Path.Combine(TargetPath, "Engine", "Plugins");
 
+        /// <summary>Describes an installation at the supplied directory.</summary>
         [JsonConstructor]
         public Engine(string targetPath)
         {
@@ -51,11 +55,6 @@ namespace UnrealAutomationCommon.Unreal
 
             // Always support DebugGame, Development, Shipping
             return true;
-        }
-
-        public override void LoadDescriptor()
-        {
-            throw new NotImplementedException();
         }
 
         public bool SupportsTestReports => Version >= new EngineVersion(4, 25);
@@ -89,18 +88,6 @@ namespace UnrealAutomationCommon.Unreal
         public bool IsPluginInstalled(string pluginName)
         {
             return FindInstalledPlugin(pluginName) != null;
-        }
-
-        public void UninstallPlugin(string pluginName)
-        {
-            Plugin? targetPlugin = FindInstalledPlugin(pluginName);
-            if (targetPlugin == null)
-            {
-                throw new Exception("Could not find plugin in installed plugins");
-            }
-            // For now, just delete the plugin files
-            // If the plugin was installed via Epic Launcher, the plugin may remain registered there, might be something to improve
-            targetPlugin.DeletePlugin();
         }
 
         public Engine EngineInstance => this;

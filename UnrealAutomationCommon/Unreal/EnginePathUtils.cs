@@ -1,6 +1,4 @@
 using System.IO;
-using LocalAutomation.Runtime;
-using UnrealAutomationCommon.Operations.OperationOptionTypes;
 
 namespace UnrealAutomationCommon.Unreal
 {
@@ -72,13 +70,6 @@ namespace UnrealAutomationCommon.Unreal
         public static string GetEditorCmdExe(this Engine engine, BuildConfiguration configuration)
         {
             return GetEditorExe(engine, configuration, true);
-        }
-
-        public static string GetEditorExe(this Engine engine, ValidatedOperationParameters operationParameters)
-        {
-            BuildConfigurationOptions buildOptions = operationParameters.GetOptions<BuildConfigurationOptions>();
-
-            return GetEditorExe(engine, buildOptions.Configuration);
         }
 
         public static string GetUBTExe(this Engine engine)

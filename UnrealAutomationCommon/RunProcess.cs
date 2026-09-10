@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using UnrealAutomationCommon.Unreal;
 
 namespace UnrealAutomationCommon
 {
@@ -42,13 +41,6 @@ namespace UnrealAutomationCommon
             Process process = Run(File, Args);
             process.WaitForExit();
             return process;
-        }
-
-        public static void Run(string File, UnrealArguments Args)
-        {
-            /* Unreal argument builders are expected to format themselves as strings, but null-safe fallback keeps this
-               thin wrapper from passing a null argument string into the process-launch overload. */
-            Run(File, Args?.ToString() ?? string.Empty);
         }
 
         public static void OpenDirectory(string DirectoryPath)

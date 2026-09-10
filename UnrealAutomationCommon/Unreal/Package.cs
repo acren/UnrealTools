@@ -1,30 +1,23 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using LocalAutomation.Core;
-using LocalAutomation.Extensions.Abstractions;
-using LocalAutomation.Runtime;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using UnrealAutomationCommon.Operations;
 
 namespace UnrealAutomationCommon.Unreal
 {
-    public interface IPackageProvider : IOperationTarget
+    /// <summary>Describes a packaged executable and its Unreal filesystem layout.</summary>
+    public class Package : IEngineInstanceProvider
     {
-        public Package? GetProvidedPackage(Engine engineContext);
-    }
+        /// <summary>Gets the directory containing the packaged executable.</summary>
+        public string TargetPath { get; }
 
-    [Target]
-    public class Package : OperationTarget, IPackageProvider, IEngineInstanceProvider
-    {
+        /// <summary>Loads package identity from a directory containing an executable.</summary>
         [JsonConstructor]
         public Package(string targetPath)
         {
             if (!PackagePaths.Instance.IsTargetDirectory(targetPath))
             {
-                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain executable");
-                return;
+                throw new ArgumentException($"Package '{targetPath}' does not contain an executable.", nameof(targetPath));
             }
 
             TargetPath = targetPath;
@@ -33,21 +26,25 @@ namespace UnrealAutomationCommon.Unreal
 
         public string ExecutablePath => PackagePaths.Instance.FindRequiredTargetFile(TargetPath);
 
-        public Project? HostProject
+        /// <summary>Gets the source project directory when this is a staged project build.</summary>
+        public string? HostProjectPath
         {
             get
             {
-                string projectPath = Path.GetFullPath(Path.Combine(TargetDirectory, @"..\..\..\")); // Up 3 levels
+                string projectPath = Path.GetFullPath(Path.Combine(TargetPath, @"..\..\..\")); // Up 3 levels
                 if (ProjectPaths.Instance.IsTargetDirectory(projectPath))
                 {
-                    return new Project(projectPath);
+                    return projectPath;
                 }
 
                 return null;
             }
         }
 
-        public string LogsPath => Path.Combine(TargetDirectory, Name, "Saved", "Logs");
+        /// <summary>Reads a standalone source project model when the package has a staged-build parent.</summary>
+        public Project? HostProject => HostProjectPath is string path ? new Project(path) : null;
+
+        public string LogsPath => Path.Combine(TargetPath, Name, "Saved", "Logs");
 
         private EngineVersion EngineVersion => new(FileVersionInfo.GetVersionInfo(ExecutablePath));
 
@@ -55,17 +52,8 @@ namespace UnrealAutomationCommon.Unreal
 
         public string EngineInstanceName => EngineInstance.DisplayName;
 
-        public Package GetProvidedPackage(Engine engineContext) => this;
+        public string Name { get; }
 
-        public override string Name { get; } = string.Empty;
-
-        public override IOperationTarget? ParentTarget => HostProject;
-
-        public override bool IsValid => PackagePaths.Instance.IsTargetFile(ExecutablePath);
-
-        public override void LoadDescriptor()
-        {
-            throw new NotImplementedException();
-        }
+        public bool IsValid => PackagePaths.Instance.IsTargetFile(ExecutablePath);
     }
 }

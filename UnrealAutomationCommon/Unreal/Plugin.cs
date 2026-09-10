@@ -1,82 +1,48 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using LocalAutomation.Core;
-using LocalAutomation.Core.IO;
-using LocalAutomation.Extensions.Abstractions;
-using LocalAutomation.Runtime;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Semver;
-using UnrealAutomationCommon.Operations;
 
 namespace UnrealAutomationCommon.Unreal
 {
-    [Target]
-    public class Plugin : OperationTarget, IEngineInstanceProvider, IDisposable
+    /// <summary>Owns plugin descriptor state, version editing, and model-level engine resolution.</summary>
+    public class Plugin : IEngineInstanceProvider
     {
-        private PluginDescriptor _pluginDescriptor = null!;
+        // A resolved project shares its descriptor snapshot with model navigation until explicitly reloaded.
         private Project? _hostProject;
 
-        private FileSystemWatcher? _watcher;
-        private Exception? _backgroundException;
+        /// <summary>Gets the directory containing the plugin descriptor.</summary>
+        public string TargetPath { get; }
 
+        /// <summary>Reads the descriptor from a plugin directory.</summary>
         [JsonConstructor]
         public Plugin(string targetPath)
         {
             if (!PluginPaths.Instance.IsTargetDirectory(targetPath))
             {
-                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain a .uplugin");
-                return;
+                throw new ArgumentException($"Plugin '{targetPath}' does not contain a .uplugin.", nameof(targetPath));
             }
 
             TargetPath = targetPath;
 
             LoadDescriptor();
-
-            // Long-lived plugin targets keep their descriptor in sync with disk edits, but the watcher must never throw
-            // because it runs on a background thread outside normal operation failure handling.
-            InitializeWatcher();
         }
 
-        public string UPluginPath
-        {
-            get
-            {
-                ThrowIfBackgroundException();
-                return PluginPaths.Instance.FindRequiredTargetFile(TargetPath);
-            }
-        }
+        public string UPluginPath => PluginPaths.Instance.FindRequiredTargetFile(TargetPath);
 
         /// <summary>
-        /// Reuses the resolved host project so repeated validation and command-preview reads do not recreate the same
-        /// watcher-backed project object over and over.
+        /// Reuses the resolved host project descriptor snapshot for model-level engine resolution.
         /// </summary>
-        public Project HostProject => ResolveHostProject();
+        public Project HostProject => _hostProject ??= new Project(HostProjectPath);
 
-        public override IOperationTarget ParentTarget => HostProject;
+        public string Name => new DirectoryInfo(TargetPath).Name;
 
-        public override string Name => DirectoryName ?? "Invalid";
+        public bool IsValid => PluginPaths.Instance.IsTargetDirectory(TargetPath) && PluginDescriptor != null;
 
-        public override bool IsValid => PluginPaths.Instance.IsTargetDirectory(TargetPath) && PluginDescriptor != null;
-
-        public PluginDescriptor PluginDescriptor
-        {
-            get
-            {
-                ThrowIfBackgroundException();
-                return _pluginDescriptor;
-            }
-            private set
-            {
-                _pluginDescriptor = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(EngineInstance));
-                OnPropertyChanged(nameof(EngineInstanceName));
-            }
-        }
+        /// <summary>Gets the descriptor snapshot from construction or the last explicit reload.</summary>
+        public PluginDescriptor PluginDescriptor { get; private set; } = null!;
 
         /**
          * Consider the plugin blueprint-only if it has zero modules
@@ -126,110 +92,13 @@ namespace UnrealAutomationCommon.Unreal
             }
         }
 
-        public override void LoadDescriptor()
+        /// <summary>Replaces descriptor state from disk; read and parse errors propagate to the caller.</summary>
+        public void LoadDescriptor()
         {
             PluginDescriptor = PluginDescriptor.Load(UPluginPath);
         }
 
-        /// <summary>
-        /// Creates the host project while recording the cost of that resolution for performance telemetry.
-        /// </summary>
-        public Project GetHostProjectForDiagnostics()
-        {
-            using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("Plugin.GetHostProject")
-                .SetTag("host_project.path", HostProjectPath);
-            bool cacheHit = _hostProject != null;
-            Project hostProject = ResolveHostProject();
-            activity.SetTag("cache.hit", cacheHit)
-                .SetTag("target.type", hostProject.GetType().Name)
-                .SetTag("is_valid", hostProject.IsValid);
-            return hostProject;
-        }
-
-        /// <summary>
-        /// Lazily creates the host project once so repeated property reads reuse the same descriptor and file watcher.
-        /// </summary>
-        private Project ResolveHostProject()
-        {
-            _hostProject ??= new Project(HostProjectPath);
-            return _hostProject;
-        }
-
-        /// <summary>
-        /// Stops background watcher activity when the owner is finished with this target so later temp-directory churn
-        /// cannot report stale file-system events against an operation that already ended.
-        /// </summary>
-        public void Dispose()
-        {
-            _watcher?.Dispose();
-            _watcher = null;
-
-            if (_hostProject is IDisposable disposableHostProject)
-            {
-                disposableHostProject.Dispose();
-            }
-
-            _hostProject = null;
-        }
-
-        /// <summary>
-        /// Starts the descriptor watcher for persistent plugin targets so UI-bound state stays in sync with disk edits.
-        /// </summary>
-        private void InitializeWatcher()
-        {
-            _watcher = new FileSystemWatcher(TargetPath);
-            _watcher.Changed += HandleWatcherChanged;
-            _watcher.EnableRaisingEvents = true;
-        }
-
-        /// <summary>
-        /// Reloads the descriptor only when the plugin file itself changed and records any failure so background watcher
-        /// errors can be surfaced to the active operation instead of crashing the process.
-        /// </summary>
-        private void HandleWatcherChanged(object sender, FileSystemEventArgs args)
-        {
-            try
-            {
-                string? pluginPath = PluginPaths.Instance.FindTargetFile(TargetPath);
-                if (pluginPath == null || !string.Equals(args.FullPath, pluginPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-
-                LoadDescriptor();
-            }
-            catch (Exception ex)
-            {
-                RecordBackgroundException(ex);
-            }
-        }
-
-        /// <summary>
-        /// Stores the latest watcher failure and logs it immediately so background file-system issues remain visible even
-        /// before an operation turns them into a normal failure result.
-        /// </summary>
-        private void RecordBackgroundException(Exception exception)
-        {
-            _backgroundException = exception;
-            ApplicationLogger.Logger.LogError(exception, "Plugin background watcher failed for '{PluginPath}'.", TargetPath);
-        }
-
-        /// <summary>
-        /// Converts a previously recorded watcher failure into a normal foreground exception so callers fail on their
-        /// own thread instead of the process dying on the watcher thread.
-        /// </summary>
-        private void ThrowIfBackgroundException()
-        {
-            Exception? backgroundException = _backgroundException;
-            if (backgroundException == null)
-            {
-                return;
-            }
-
-            _backgroundException = null;
-            throw new InvalidOperationException($"Plugin target '{TargetPath}' encountered a background reload failure.", backgroundException);
-        }
-
+        /// <summary>Writes the integer version derived from the semantic version, returning whether it changed.</summary>
         public bool UpdateVersionInteger()
         {
             SemVersion version = PluginDescriptor.SemVersion;
@@ -255,11 +124,6 @@ namespace UnrealAutomationCommon.Unreal
             (new JsonSerializer()).Serialize(jtw, descriptorJObject);
 
             return true;
-        }
-
-        public void DeletePlugin()
-        {
-            FileUtils.DeleteDirectory(PluginPath);
         }
 
     }

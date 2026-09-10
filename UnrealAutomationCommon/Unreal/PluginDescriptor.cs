@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using LocalAutomation.Core;
-using LocalAutomation.Core.IO;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Semver;
 
@@ -21,28 +18,11 @@ namespace UnrealAutomationCommon.Unreal
         public SemVersion SemVersion => SemVersion.Parse(VersionName, SemVersionStyles.Strict);
         public EngineVersion? EngineVersion => string.IsNullOrEmpty(EngineVersionString) ? null : new(EngineVersionString);
 
+        /// <summary>Reads descriptor state, propagating file and parse failures to the caller.</summary>
         public static PluginDescriptor Load(string uPluginPath)
         {
-            using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("PluginDescriptor.Load")
-                .SetTag("descriptor.path", uPluginPath);
-            FileUtils.WaitForFileReadable(uPluginPath);
-            try
-            {
-                return JsonConvert.DeserializeObject<PluginDescriptor>(File.ReadAllText(uPluginPath))
-                    ?? throw new InvalidOperationException($"Could not deserialize plugin descriptor '{uPluginPath}'.");
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    ApplicationLogger.Logger.LogError(ex, "Failed to deserialize plugin descriptor '{PluginDescriptorPath}'.", uPluginPath);
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                throw new InvalidOperationException($"Failed to load plugin descriptor '{uPluginPath}'.", ex);
-            }
+            return JsonConvert.DeserializeObject<PluginDescriptor>(File.ReadAllText(uPluginPath))
+                ?? throw new InvalidOperationException($"Could not deserialize plugin descriptor '{uPluginPath}'.");
         }
     }
 }

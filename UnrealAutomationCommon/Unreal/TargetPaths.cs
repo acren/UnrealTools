@@ -1,5 +1,5 @@
+using System;
 using System.IO;
-using LocalAutomation.Core.IO;
 
 namespace UnrealAutomationCommon.Unreal
 {
@@ -17,7 +17,8 @@ namespace UnrealAutomationCommon.Unreal
 
         public bool IsTargetFile(string filePath)
         {
-            return FileUtils.HasExtension(filePath, TargetFileExtension);
+            // Discovery requires an existing file, not just a descriptor-shaped path.
+            return File.Exists(filePath) && string.Equals(Path.GetExtension(filePath), TargetFileExtension, StringComparison.InvariantCultureIgnoreCase);
         }
 
         public virtual string? FindTargetFile(string directoryPath)

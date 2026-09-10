@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using LocalAutomation.Core;
 using Newtonsoft.Json;
 
 namespace UnrealAutomationCommon.Unreal
@@ -122,10 +121,9 @@ namespace UnrealAutomationCommon.Unreal
             return descriptor;
         }
 
+        /// <summary>Reads descriptor state, propagating file and parse failures to the caller.</summary>
         public static ProjectDescriptor Load(string uProjectPath)
         {
-            using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("ProjectDescriptor.Load")
-                .SetTag("descriptor.path", uProjectPath);
             return JsonConvert.DeserializeObject<ProjectDescriptor>(File.ReadAllText(uProjectPath))
                 ?? throw new InvalidOperationException($"Could not deserialize project descriptor '{uProjectPath}'.");
         }

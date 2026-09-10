@@ -4,10 +4,8 @@ using System.Reflection;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
 using UnrealAutomationCommon;
-using UnrealAutomationCommon.Operations;
-using UnrealAutomationCommon.Operations.BaseOperations;
-using UnrealAutomationCommon.Operations.OperationTypes;
 using UnrealAutomationCommon.Unreal;
+using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 using RuntimeTarget = global::LocalAutomation.Runtime.IOperationTarget;
 
 namespace LocalAutomation.Extensions.Unreal;
@@ -28,12 +26,11 @@ public sealed class UnrealExtensionModule : IExtensionModule
     public string DisplayName => "Unreal Engine";
 
     /// <summary>
-    /// Unreal keeps its discoverable targets and operations in UnrealAutomationCommon, not beside the module type, so the
-    /// host must scan that assembly for attributed descriptors during module registration.
+    /// Supplies the assembly that owns the Unreal extension's runtime targets and operation descriptors.
     /// </summary>
     public IEnumerable<Assembly> GetDescriptorAssemblies()
     {
-        return new[] { typeof(Project).Assembly };
+        return new[] { typeof(UnrealExtensionModule).Assembly };
     }
 
     /// <summary>
@@ -82,7 +79,7 @@ public sealed class UnrealExtensionModule : IExtensionModule
                     throw new InvalidOperationException($"Project '{project.DisplayName}' does not currently resolve to an engine install.");
                 }
 
-                RunProcess.OpenDirectory(project.GetStagedBuildWindowsPath(engine));
+                RunProcess.OpenDirectory(project.Model.GetStagedBuildWindowsPath(engine));
             },
             canExecute: target => ((Project)target).EngineInstance != null));
     }

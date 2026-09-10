@@ -2,6 +2,10 @@ using System;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using UnrealAutomationCommon.Unreal;
+using Engine = LocalAutomation.Extensions.Unreal.Targets.Engine;
+using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
+using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
+using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal;
 

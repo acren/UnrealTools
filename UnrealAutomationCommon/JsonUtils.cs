@@ -2,7 +2,8 @@ using Newtonsoft.Json.Linq;
 
 namespace UnrealAutomationCommon
 {
-    static class JsonUtils
+    /// <summary>Updates JSON properties while reporting whether serialized descriptor content changed.</summary>
+    public static class JsonUtils
     {
         public static bool Set(this JObject jObject, string propertyName, JToken? value)
         {

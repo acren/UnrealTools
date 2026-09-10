@@ -1,43 +1,31 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using LocalAutomation.Core;
-using LocalAutomation.Core.IO;
-using LocalAutomation.Extensions.Abstractions;
-using LocalAutomation.Runtime;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using UnrealAutomationCommon.Operations;
 
 namespace UnrealAutomationCommon.Unreal
 {
-    [Target]
-    public class Project : OperationTarget, IPackageProvider, IEngineInstanceProvider, IDisposable
+    /// <summary>Owns project descriptor state and filesystem calculations for explicit utility use.</summary>
+    public class Project : IEngineInstanceProvider
     {
-        private ProjectDescriptor _projectDescriptor = null!;
-        private FileSystemWatcher? _watcher;
-        private Exception? _backgroundException;
+        /// <summary>Gets the directory containing the project descriptor.</summary>
+        public string TargetPath { get; }
 
+        /// <summary>Gets the project directory used by configuration and content path utilities.</summary>
+        public string TargetDirectory => TargetPath;
+
+        /// <summary>Reads the descriptor from a project directory.</summary>
         [JsonConstructor]
         public Project(string targetPath)
         {
             if (!ProjectPaths.Instance.IsTargetDirectory(targetPath))
             {
-                ApplicationLogger.Logger.LogError($"Package {targetPath} does not contain a .uproject");
-                return;
+                throw new ArgumentException($"Project '{targetPath}' does not contain a .uproject.", nameof(targetPath));
             }
 
             TargetPath = targetPath;
 
             LoadDescriptor();
-
-            // Long-lived project targets keep their descriptor in sync with disk edits, but the watcher must never throw
-            // because it runs on a background thread outside normal operation failure handling.
-            InitializeWatcher();
-
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(Name));
         }
 
         /// <summary>
@@ -57,30 +45,10 @@ namespace UnrealAutomationCommon.Unreal
             return new Project(resolvedProjectPath);
         }
 
-        public string UProjectPath
-        {
-            get
-            {
-                ThrowIfBackgroundException();
-                return ProjectPaths.Instance.FindRequiredTargetFile(TargetPath);
-            }
-        }
+        public string UProjectPath => ProjectPaths.Instance.FindRequiredTargetFile(TargetPath);
 
-        public ProjectDescriptor ProjectDescriptor
-        {
-            get
-            {
-                ThrowIfBackgroundException();
-                return _projectDescriptor;
-            }
-            private set
-            {
-                _projectDescriptor = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(EngineInstance));
-                OnPropertyChanged(nameof(EngineInstanceName));
-            }
-        }
+        /// <summary>Gets the descriptor snapshot from construction or the last explicit reload.</summary>
+        public ProjectDescriptor ProjectDescriptor { get; private set; } = null!;
 
         public Engine EngineInstance => ProjectDescriptor.Engine;
 
@@ -97,10 +65,10 @@ namespace UnrealAutomationCommon.Unreal
             }
         }
 
-        public override string Name => Path.GetFileNameWithoutExtension(UProjectPath) ?? "Invalid";
-        public override string DisplayName => DirectoryName ?? Name;
+        public string Name => Path.GetFileNameWithoutExtension(UProjectPath) ?? "Invalid";
+        public string DisplayName => new DirectoryInfo(TargetPath).Name;
 
-        public override bool IsValid => ProjectPaths.Instance.IsTargetDirectory(TargetPath);
+        public bool IsValid => ProjectPaths.Instance.IsTargetDirectory(TargetPath);
 
         public string ProjectPath => TargetPath;
 
@@ -135,98 +103,15 @@ namespace UnrealAutomationCommon.Unreal
             }
         }
 
-        public Package? GetProvidedPackage(Engine engineContext) => GetStagedPackage(engineContext);
-
-        public override void LoadDescriptor()
+        /// <summary>Replaces descriptor state from disk; read and parse errors propagate to the caller.</summary>
+        public void LoadDescriptor()
         {
-            FileUtils.WaitForFileReadable(UProjectPath);
             ProjectDescriptor = ProjectDescriptor.Load(UProjectPath);
-        }
-
-        /// <summary>
-        /// Resolves the effective engine instance while recording the cost of descriptor-driven engine lookup for
-        /// performance telemetry.
-        /// </summary>
-        public Engine GetEngineInstanceForDiagnostics()
-        {
-            using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("Project.GetEngineInstance")
-                .SetTag("descriptor.path", UProjectPath);
-            Engine engine = EngineInstance;
-            activity.SetTag("engine.name", engine.DisplayName);
-            return engine;
         }
 
         public string GetStagedBuildWindowsPath(Engine engineContext)
         {
             return Path.Combine(StagedBuildsPath, engineContext.GetWindowsPlatformName());
-        }
-
-        /// <summary>
-        /// Stops background watcher activity when the owner is finished with this target so later temp-directory churn
-        /// cannot report stale file-system events against code that already moved on.
-        /// </summary>
-        public void Dispose()
-        {
-            _watcher?.Dispose();
-            _watcher = null;
-        }
-
-        /// <summary>
-        /// Starts the descriptor watcher for persistent project targets so editor-visible state tracks file changes.
-        /// </summary>
-        private void InitializeWatcher()
-        {
-            _watcher = new FileSystemWatcher(TargetPath);
-            _watcher.Changed += HandleWatcherChanged;
-            _watcher.EnableRaisingEvents = true;
-        }
-
-        /// <summary>
-        /// Reloads the project descriptor when the .uproject changes and records failures instead of letting the
-        /// watcher thread terminate the whole process.
-        /// </summary>
-        private void HandleWatcherChanged(object sender, FileSystemEventArgs args)
-        {
-            try
-            {
-                string? projectPath = ProjectPaths.Instance.FindTargetFile(TargetPath);
-                if (projectPath == null || !string.Equals(args.FullPath, projectPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-
-                LoadDescriptor();
-            }
-            catch (Exception ex)
-            {
-                RecordBackgroundException(ex);
-            }
-        }
-
-        /// <summary>
-        /// Stores and logs watcher failures so background project reload issues stay visible and can be turned into a
-        /// normal operation failure by the caller.
-        /// </summary>
-        private void RecordBackgroundException(Exception exception)
-        {
-            _backgroundException = exception;
-            ApplicationLogger.Logger.LogError(exception, "Project background watcher failed for '{ProjectPath}'.", TargetPath);
-        }
-
-        /// <summary>
-        /// Converts a previously recorded watcher failure into a normal foreground exception so callers fail on their
-        /// own thread instead of the process dying on the watcher thread.
-        /// </summary>
-        private void ThrowIfBackgroundException()
-        {
-            Exception? backgroundException = _backgroundException;
-            if (backgroundException == null)
-            {
-                return;
-            }
-
-            _backgroundException = null;
-            throw new InvalidOperationException($"Project target '{TargetPath}' encountered a background reload failure.", backgroundException);
         }
 
         public Package? GetStagedPackage(Engine engineContext)
@@ -238,29 +123,6 @@ namespace UnrealAutomationCommon.Unreal
         public string GetStagedPackageExecutablePath(Engine engineContext)
         {
             return Path.Combine(GetStagedBuildWindowsPath(engineContext), Name + ".exe");
-        }
-
-        // Copy the plugin into this project
-        public void AddPlugin(string pluginPath)
-        {
-            FileUtils.CopyDirectory(pluginPath, PluginsPath, true);
-        }
-
-        // Copy the plugin into this project
-        public void AddPlugin(Plugin plugin)
-        {
-            AddPlugin(plugin.PluginPath);
-        }
-
-        public void RemovePlugin(string pluginName)
-        {
-            foreach (Plugin plugin in Plugins)
-            {
-                if (plugin.Name == pluginName)
-                {
-                    FileUtils.DeleteDirectory(plugin.PluginPath);
-                }
-            }
         }
 
         /// <summary>
@@ -279,33 +141,15 @@ namespace UnrealAutomationCommon.Unreal
          */
         public bool IsBlueprintOnly => ProjectDescriptor?.Modules.Count == 0;
 
-        public void ConvertToBlueprintOnly()
+        /// <summary>Updates the project version in DefaultGame.ini, requiring its settings section to exist.</summary>
+        public void SetProjectVersion(string version)
         {
-            // Remove source folder
-            FileUtils.DeleteDirectoryIfExists(SourcePath);
-
-            // Remove modules property
-            JObject uProjectContents = JObject.Parse(File.ReadAllText(UProjectPath));
-            uProjectContents.Remove("Modules");
-
-            File.WriteAllText(UProjectPath, uProjectContents.ToString());
-        }
-
-        public void SetProjectVersion(string version, ILogger logger)
-        {
-            string defaultGameIniPath = Path.Combine(TargetDirectory, "Config", "DefaultGame.ini");
+            string defaultGameIniPath = Path.Combine(TargetPath, "Config", "DefaultGame.ini");
             UnrealConfig config = new(defaultGameIniPath);
-            ConfigSection? projectSettings = config.GetSection("/Script/EngineSettings.GeneralProjectSettings");
-            if (projectSettings != null)
-            {
-                projectSettings.SetValue("ProjectVersion", version);
-                config.Save();
-                logger.LogInformation($"Updated project version to {version}");
-            }
-            else
-            {
-                logger.LogWarning("Could not find GeneralProjectSettings section to update project version");
-            }
+            ConfigSection projectSettings = config.GetSection("/Script/EngineSettings.GeneralProjectSettings")
+                ?? throw new InvalidOperationException("Could not find GeneralProjectSettings section to update project version.");
+            projectSettings.SetValue("ProjectVersion", version);
+            config.Save();
         }
 
         /// <summary>

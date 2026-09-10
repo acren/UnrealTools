@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using LocalAutomation.Core;
 using Microsoft.CodeAnalysis;
 
 namespace UnrealAutomationCommon
@@ -205,14 +204,8 @@ namespace UnrealAutomationCommon
 
         public override string ToString()
         {
-            var builtCommandString = "";
-            foreach (Argument arg in _arguments)
-            {
-                CommandLineFormatting.CombineArgs(ref builtCommandString, arg.ToString());
-            }
-
-            CommandLineFormatting.CombineArgs(ref builtCommandString, _rawArgs);
-            return builtCommandString;
+            // Empty raw text contributes no separator; argument order determines command-line override precedence.
+            return string.Join(" ", _arguments.Select(arg => arg.ToString()).Append(_rawArgs).Where(arg => !string.IsNullOrEmpty(arg)));
         }
 
     }
