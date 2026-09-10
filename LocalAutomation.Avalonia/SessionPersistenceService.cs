@@ -8,20 +8,16 @@ using LocalAutomation.Persistence;
 using LocalAutomation.Runtime;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
 
 namespace LocalAutomation.Avalonia;
 
 /// <summary>
-/// Loads, migrates, and saves the Avalonia shell's stable session snapshot so layout or editor refactors do not wipe
+/// Loads and saves the Avalonia shell's stable session snapshot so layout or editor refactors do not wipe
 /// target-scoped working state.
 /// </summary>
 public sealed class SessionPersistenceService
 {
-    private readonly ExtensionCatalog _catalog;
     private readonly TargetDiscoveryService _targets;
-    private readonly OperationCatalogService _operations;
-    private readonly OperationSessionService _operationSession;
     private readonly string _dataFilePath;
 
     /// <summary>
@@ -29,16 +25,10 @@ public sealed class SessionPersistenceService
     /// </summary>
     public SessionPersistenceService(
         ShellIdentity shellIdentity,
-        ExtensionCatalog catalog,
-        TargetDiscoveryService targets,
-        OperationCatalogService operations,
-        OperationSessionService operationSession)
+        TargetDiscoveryService targets)
     {
         shellIdentity = shellIdentity ?? throw new ArgumentNullException(nameof(shellIdentity));
-        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _targets = targets ?? throw new ArgumentNullException(nameof(targets));
-        _operations = operations ?? throw new ArgumentNullException(nameof(operations));
-        _operationSession = operationSession ?? throw new ArgumentNullException(nameof(operationSession));
 
         // Keep each launcher's persisted shell state inside its own LocalAppData root so host-specific shells do not overwrite
         // one another's target lists, selected operations, or option values.
@@ -49,7 +39,8 @@ public sealed class SessionPersistenceService
     }
 
     /// <summary>
-    /// Loads the persisted snapshot, migrating the legacy live-object session format when necessary.
+    /// Loads an explicitly versioned snapshot, returning an empty session only when no file exists.
+    /// Malformed or unsupported snapshots throw rather than discarding persisted working state.
     /// </summary>
     public SessionSnapshot Load()
     {
@@ -58,24 +49,34 @@ public sealed class SessionPersistenceService
             return new SessionSnapshot();
         }
 
-        try
-        {
-            string jsonText = File.ReadAllText(_dataFilePath);
-            JToken token = JToken.Parse(jsonText);
+        string jsonText = File.ReadAllText(_dataFilePath);
+        JObject token = JObject.Parse(jsonText);
 
-            if (token["Version"] != null || token["version"] != null)
-            {
-                SessionSnapshot? snapshot = token.ToObject<SessionSnapshot>(CreateSnapshotSerializer());
-                return snapshot ?? new SessionSnapshot();
-            }
-
-            SessionState? legacyState = token.ToObject<SessionState>(CreateLegacySerializer());
-            return legacyState == null ? new SessionSnapshot() : MigrateLegacyState(legacyState);
-        }
-        catch
+        /* Validate the serialized declaration before deserialization: the model initializer would otherwise
+           supply a version for missing input. A single case-insensitive declaration keeps validation unambiguous. */
+        JProperty[] versionProperties = token.Properties()
+            .Where(property => string.Equals(property.Name, nameof(SessionSnapshot.Version), StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (versionProperties.Length != 1 ||
+            versionProperties[0].Value.Type != JTokenType.Integer ||
+            !JToken.DeepEquals(versionProperties[0].Value, new JValue(2)))
         {
-            return new SessionSnapshot();
+            throw new JsonSerializationException("Session snapshot must explicitly declare one integer Version of 2.");
         }
+
+        SessionSnapshot snapshot = token.ToObject<SessionSnapshot>(CreateSnapshotSerializer())
+            ?? throw new JsonSerializationException("Session snapshot must contain an object.");
+
+        // Reject null collections and incomplete target identities before callers enumerate or restore them.
+        if (snapshot.Targets == null || snapshot.SelectedOperationIdsByTargetType == null ||
+            snapshot.PendingTargetPath == null || snapshot.Targets.Any(target => target == null ||
+                string.IsNullOrWhiteSpace(target.Key) || string.IsNullOrWhiteSpace(target.TargetTypeId) ||
+                string.IsNullOrWhiteSpace(target.Path)))
+        {
+            throw new JsonSerializationException("Session snapshot contains null state or an incomplete target identity or path.");
+        }
+
+        return snapshot;
     }
 
     /// <summary>
@@ -159,77 +160,6 @@ public sealed class SessionPersistenceService
     }
 
     /// <summary>
-    /// Migrates the legacy live-object session file into the stable nested-per-target snapshot format.
-    /// </summary>
-    private SessionSnapshot MigrateLegacyState(SessionState legacyState)
-    {
-        SessionSnapshot snapshot = new()
-        {
-            PendingTargetPath = legacyState.NewTargetPath
-        };
-
-        foreach (IOperationTarget target in legacyState.Targets.OfType<IOperationTarget>())
-        {
-            TargetTypeId? targetTypeId = _targets.GetTargetTypeId(target);
-            if (targetTypeId == null || !_targets.IsValidTarget(target))
-            {
-                continue;
-            }
-
-            string targetPath = _targets.GetTargetPath(target);
-            snapshot.Targets.Add(new TargetSessionSnapshot
-            {
-                Key = TargetKeyUtility.BuildTargetKey(targetTypeId.Value, targetPath).Value,
-                TargetTypeId = targetTypeId.Value.Value,
-                Path = targetPath
-            });
-        }
-
-        TargetSessionSnapshot? selectedTarget = snapshot.Targets.FirstOrDefault(item =>
-            string.Equals(item.Path, legacyState.SelectedTargetPath, StringComparison.OrdinalIgnoreCase) &&
-            item.TypedTargetTypeId == ResolveLegacyTargetTypeId(legacyState.SelectedTargetTypeName));
-
-        selectedTarget ??= snapshot.Targets.FirstOrDefault();
-        if (selectedTarget == null)
-        {
-            return snapshot;
-        }
-
-        Dictionary<TargetTypeId, OperationId?> typedSelections = snapshot.TypedSelectedOperationIdsByTargetType;
-        typedSelections[selectedTarget.TypedTargetTypeId] = legacyState.OperationType == null
-            ? null
-            : _operations.GetOperation(legacyState.OperationType)?.Id;
-        snapshot.TypedSelectedOperationIdsByTargetType = typedSelections;
-
-        // Migrate legacy option values into the new layered setting files for the selected target so existing user
-        // edits are preserved when upgrading from the old session-owned persistence model.
-        IOperationTarget? selectedRuntimeTarget = legacyState.Targets.OfType<IOperationTarget>().FirstOrDefault(item =>
-            string.Equals(_targets.GetTargetPath(item), selectedTarget.Path, StringComparison.OrdinalIgnoreCase) &&
-            _targets.GetTargetTypeId(item) == selectedTarget.TypedTargetTypeId);
-        selectedRuntimeTarget ??= legacyState.Targets.OfType<IOperationTarget>().FirstOrDefault();
-        if (selectedRuntimeTarget != null)
-        {
-            _operationSession.SaveOptionValues(legacyState.OptionsInstances.Cast<object>(), selectedRuntimeTarget);
-        }
-
-        snapshot.SelectedTargetKey = selectedTarget.Key;
-        return snapshot;
-    }
-
-    /// <summary>
-    /// Resolves the target descriptor identifier from the legacy runtime type name.
-    /// </summary>
-    private TargetTypeId? ResolveLegacyTargetTypeId(string? legacyTypeName)
-    {
-        if (string.IsNullOrWhiteSpace(legacyTypeName))
-        {
-            return null;
-        }
-
-        return _catalog.TargetDescriptors.FirstOrDefault(descriptor => string.Equals(descriptor.TargetType.FullName, legacyTypeName, StringComparison.Ordinal))?.Id;
-    }
-
-    /// <summary>
     /// Creates the Json.NET serializer used for the stable session snapshot.
     /// </summary>
     private static JsonSerializer CreateSnapshotSerializer()
@@ -237,17 +167,4 @@ public sealed class SessionPersistenceService
         return new JsonSerializer();
     }
 
-    /// <summary>
-    /// Reuses the old serializer settings so the legacy live-object state can still be deserialized for one-way
-    /// migration.
-    /// </summary>
-    private static JsonSerializer CreateLegacySerializer()
-    {
-        return new JsonSerializer
-        {
-            PreserveReferencesHandling = PreserveReferencesHandling.All,
-            TypeNameHandling = TypeNameHandling.Auto,
-            SerializationBinder = new DefaultSerializationBinder()
-        };
-    }
 }
