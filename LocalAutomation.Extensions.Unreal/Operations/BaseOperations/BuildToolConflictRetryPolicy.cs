@@ -1,5 +1,6 @@
 using System;
 using LocalAutomation.Runtime;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
 {
@@ -13,14 +14,10 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
             shouldRetry: Matches,
             getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
 
+        /// <summary>Adapts attempt diagnostics to the independent Unreal contention classifier.</summary>
         private static bool Matches(ExecutionRetryContext context)
         {
-            string failureText = RetryFailureText.Build(context);
-            bool sharedBuildRulesLock = RetryFailureText.Contains(failureText, "BuildRules")
-                && RetryFailureText.Contains(failureText, "MarketplaceRules.dll")
-                && WindowsSharingViolationFailure.Matches(failureText);
-            return sharedBuildRulesLock
-                || RetryFailureText.Contains(failureText, "A conflicting instance of UnrealBuildTool is already running");
+            return UnrealFailureClassifier.IsBuildToolConflict(RetryFailureText.Build(context));
         }
     }
 }

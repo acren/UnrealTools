@@ -1,20 +1,18 @@
 using System;
 using System.IO;
 using LocalAutomation.Core;
-using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using UnrealAutomationCommon.Unreal;
-using EngineModel = UnrealAutomationCommon.Unreal.Engine;
-using PluginModel = UnrealAutomationCommon.Unreal.Plugin;
-using ProjectModel = UnrealAutomationCommon.Unreal.Project;
+using SystemUtilities.IO;
+using UnrealUtilities;
+using EngineModel = UnrealUtilities.Engine;
+using ProjectModel = UnrealUtilities.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 
-/// <summary>Owns project runtime notifications, descriptor watching, and filesystem-management operations.</summary>
+/// <summary>Owns project runtime notifications and descriptor watching.</summary>
 [Target]
 public class Project : OperationTarget, IPackageProvider, IEngineInstanceProvider, IDisposable
 {
@@ -98,43 +96,8 @@ public class Project : OperationTarget, IPackageProvider, IEngineInstanceProvide
     /// <summary>Wraps the staged model only when a runtime operation requests package provision.</summary>
     public Package? GetProvidedPackage(EngineModel engineContext)
     {
-        UnrealAutomationCommon.Unreal.Package? package = Model.GetStagedPackage(engineContext);
+        UnrealUtilities.Package? package = Model.GetStagedPackage(engineContext);
         return package == null ? null : new Package(package);
-    }
-
-    /// <summary>Copies plugin files into this project's plugin directory with Core overwrite semantics.</summary>
-    public void AddPlugin(string pluginPath)
-    {
-        FileUtils.CopyDirectory(pluginPath, Model.PluginsPath, true);
-    }
-
-    /// <summary>Copies the supplied runtime plugin into this project.</summary>
-    public void AddPlugin(Plugin plugin)
-    {
-        AddPlugin(plugin.Model.PluginPath);
-    }
-
-    /// <summary>Removes matching project-contained plugins using Core deletion semantics.</summary>
-    public void RemovePlugin(string pluginName)
-    {
-        foreach (PluginModel plugin in Model.Plugins)
-        {
-            if (plugin.Name == pluginName)
-            {
-                FileUtils.DeleteDirectory(plugin.PluginPath);
-            }
-        }
-    }
-
-    /// <summary>Removes source files and the descriptor's Unreal module declarations.</summary>
-    public void ConvertToBlueprintOnly()
-    {
-        ProjectModel model = Model;
-        FileUtils.DeleteDirectoryIfExists(model.SourcePath);
-        // Edit the persisted field directly so unmodeled descriptor properties survive the conversion.
-        JObject descriptor = JObject.Parse(File.ReadAllText(model.UProjectPath));
-        descriptor.Remove("Modules");
-        File.WriteAllText(model.UProjectPath, descriptor.ToString());
     }
 
     /// <summary>Starts background descriptor refresh for editor-visible project state.</summary>

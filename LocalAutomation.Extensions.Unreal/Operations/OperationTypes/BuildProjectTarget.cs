@@ -1,6 +1,5 @@
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using LocalAutomation.Extensions.Unreal.Unreal;
-using UnrealAutomationCommon;
+using UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -15,16 +14,12 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         /// Uses the project's primary target name so direct UBT compilation produces the game receipt that staging later
         /// expects to find in Binaries/Win64.
         /// </summary>
-        protected override void ConfigureBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
+        protected override Arguments CreateBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Project project = GetRequiredTarget(operationParameters);
             ProjectTargetBuildSpec buildTarget = ProjectTargetBuildSpec.ForGameTarget(project.Model, operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration);
 
-            // The shared build identity keeps the command-line target tuple aligned with later receipt selection.
-            args.SetArgument(buildTarget.TargetName);
-            args.SetArgument(buildTarget.Platform);
-            args.SetArgument(buildTarget.Configuration.ToString());
-            args.SetPath(project.Model.UProjectPath);
+            return UbtArguments.CreateProjectTargetArguments(project.Model, buildTarget);
         }
 
         /// <summary>

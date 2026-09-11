@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using LocalAutomation.Core;
 using LocalAutomation.Runtime;
+using SystemUtilities.Processes;
 
 namespace LocalAutomation.Commands;
 
@@ -15,17 +17,18 @@ public sealed class CommandProcessBehavior : IOperationExecutionBehavior
     private readonly CommandProcessPolicy _policy;
     private readonly Func<ValidatedOperationParameters, ExecutionRetryPolicy?>? _resolveRetryPolicy;
     private readonly Action<string>? _observeOutputLine;
-    private readonly Action<ExecutionTaskContext, ValidatedOperationParameters, OperationResult>? _processEnded;
+    // Completion observes the same finalized command passed to the process executor.
+    private readonly Action<ExecutionTaskContext, ValidatedOperationParameters, Command, OperationResult>? _processEnded;
 
     /// <summary>
-    /// Creates command behavior from the command builder and the task-local policy hooks the operation requires.
+    /// Creates command behavior with task-local hooks whose completion callback receives the executed command.
     /// </summary>
     public CommandProcessBehavior(
         Func<ValidatedOperationParameters, Command> buildCommand,
         CommandProcessPolicy? policy = null,
         Func<ValidatedOperationParameters, ExecutionRetryPolicy?>? resolveRetryPolicy = null,
         Action<string>? observeOutputLine = null,
-        Action<ExecutionTaskContext, ValidatedOperationParameters, OperationResult>? processEnded = null)
+        Action<ExecutionTaskContext, ValidatedOperationParameters, Command, OperationResult>? processEnded = null)
     {
         _buildCommand = buildCommand ?? throw new ArgumentNullException(nameof(buildCommand));
         _policy = policy ?? CommandProcessPolicy.Default;
@@ -70,7 +73,7 @@ public sealed class CommandProcessBehavior : IOperationExecutionBehavior
     }
 
     /// <summary>
-    /// Runs one finalized command and reports the terminal result to the operation callback.
+    /// Runs one finalized command and supplies that command and its terminal result to the operation callback.
     /// </summary>
     public async Task<OperationResult> ExecuteAsync(ExecutionTaskContext context)
     {
@@ -81,8 +84,26 @@ public sealed class CommandProcessBehavior : IOperationExecutionBehavior
 
         ValidatedOperationParameters operationParameters = context.ValidatedOperationParameters;
         Command command = BuildEffectiveCommand(operationParameters);
-        OperationResult result = await CommandProcessExecutor.ExecuteAsync(context, command, _policy, _observeOutputLine).ConfigureAwait(false);
-        _processEnded?.Invoke(context, operationParameters, result);
+        OperationResult result;
+        using (PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("CommandProcessBehavior.ExecuteProcess")
+            .SetTag("task.id", context.TaskId.Value)
+            .SetTag("task.title", context.Title)
+            .SetTag("process.file", Path.GetFileName(command.File)))
+        {
+            ProcessResult processResult = await ProcessExecutor.ExecuteAsync(command, _policy, context.Logger, context.CancellationToken, _observeOutputLine).ConfigureAwait(false);
+            // Cancellation takes precedence; an absent exit code cannot establish successful completion.
+            ExecutionTaskOutcome outcome = processResult.WasCancelled
+                ? ExecutionTaskOutcome.Cancelled
+                : processResult.ExitCode == 0
+                    ? ExecutionTaskOutcome.Completed
+                    : ExecutionTaskOutcome.Failed;
+            result = new OperationResult(outcome);
+            if (processResult.ExitCode is int exitCode)
+            {
+                result.ExitCode = exitCode;
+            }
+        }
+        _processEnded?.Invoke(context, operationParameters, command, result);
         return result;
     }
 

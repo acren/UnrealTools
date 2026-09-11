@@ -1,8 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
 {
@@ -28,23 +29,13 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         /// </summary>
         protected override BuildCookRunProjectRequest GetBuildCookRunRequest(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
-            return new BuildCookRunProjectRequest(
-                BuildCookRunProjectPhases.Build,
-                configuration: operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration);
+            return UATArguments.CreateEditorBuildRequest(
+                operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration);
         }
 
         protected override string GetOperationName()
         {
             return "Build Editor";
-        }
-
-        /// <summary>
-        /// Keeps the BuildCookRun editor flow constrained to Development because UAT forces that configuration
-        /// internally even when callers request something else.
-        /// </summary>
-        private static bool SupportsRequestedConfiguration(BuildConfiguration configuration)
-        {
-            return configuration == BuildConfiguration.Development;
         }
 
         /// <summary>
@@ -54,12 +45,16 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         protected override string? CheckRequirementsSatisfied(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             BuildConfiguration configuration = operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration;
-            if (!SupportsRequestedConfiguration(configuration))
+            try
             {
-                return "Configuration is not supported";
+                UATArguments.CreateEditorBuildRequest(configuration);
+                return null;
             }
-
-            return null;
+            catch (InvalidOperationException exception)
+            {
+                // Surface the reusable preset's configuration restriction through runtime validation.
+                return exception.Message;
+            }
         }
     }
 }

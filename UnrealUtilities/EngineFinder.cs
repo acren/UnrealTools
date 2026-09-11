@@ -1,0 +1,204 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.Win32;
+
+namespace UnrealUtilities
+{
+    public static class EngineFinder
+    {
+        public static bool IsEngineInstallDirectory(string path)
+        {
+            return EnginePaths.Instance.IsTargetDirectory(path);
+        }
+
+        public static List<Engine> GetEngineInstallsFromRegistry()
+        {
+            /* Registry-backed engine discovery is a Windows-only feature. Non-Windows hosts skip it entirely and rely on
+               manifest or explicit-path discovery instead of tripping platform analyzers or runtime failures. */
+            if (!OperatingSystem.IsWindows())
+            {
+                return new List<Engine>();
+            }
+
+            try
+            {
+                RegistryKey localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+
+                RegistryKey? localMachineUnrealEngine = localMachine.OpenSubKey(@"Software\EpicGames\Unreal Engine");
+                if (localMachineUnrealEngine == null)
+                {
+                    return new List<Engine>();
+                }
+
+                string[] subKeys = localMachineUnrealEngine.GetSubKeyNames();
+
+                var result = new List<Engine>();
+
+                foreach (string subKeyString in subKeys)
+                {
+                    RegistryKey? engineVersionKey = localMachineUnrealEngine.OpenSubKey(subKeyString);
+                    string? directory = engineVersionKey?.GetValue("InstalledDirectory") as string;
+                    if (!string.IsNullOrWhiteSpace(directory) && IsEngineInstallDirectory(directory))
+                    {
+                        result.Add(new Engine(directory)
+                        {
+                            Key = subKeyString
+                        });
+                    }
+                }
+
+                RegistryKey currentUser = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+                RegistryKey? currentUserBuilds = currentUser.OpenSubKey(@"SOFTWARE\Epic Games\Unreal Engine\Builds");
+
+                if (currentUserBuilds == null)
+                {
+                    return result;
+                }
+
+                string[] buildValueNames = currentUserBuilds.GetValueNames();
+                foreach (string buildName in buildValueNames)
+                {
+                    string? buildPath = currentUserBuilds.GetValue(buildName) as string;
+                    if (buildPath == null)
+                    {
+                        continue;
+                    }
+
+                    buildPath = buildPath.Replace('/', '\\');
+                    if (IsEngineInstallDirectory(buildPath))
+                    {
+                        result.Add(new Engine(buildPath)
+                        {
+                            Key = buildName
+                        });
+                    }
+                }
+
+                return result;
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // The generic LocalAutomation host can load Unreal extensions on non-Windows platforms or under custom
+                // load contexts where the registry-backed discovery API is unavailable. In those environments we fall
+                // back to other discovery sources instead of failing project descriptor deserialization.
+                return new List<Engine>();
+            }
+        }
+
+        public static Engine? GetEngineInstallFromRegistry(string engineAssociation)
+        {
+            if (engineAssociation.Contains("."))
+            // It's a launcher version
+            {
+                if (engineAssociation.Count(c => c == '.') > 1)
+                // Trim patch from version number
+                {
+                    engineAssociation = engineAssociation.Remove(engineAssociation.LastIndexOf('.'));
+                }
+            }
+
+            return GetEngineInstallsFromRegistry().Find(x => x.Key == engineAssociation);
+        }
+
+        public static List<Engine> GetEngineInstallsFromLauncherManifest()
+        {
+            var result = new List<Engine>();
+            LauncherInstalledEngineManifest? manifest = LauncherInstalledEngineManifest.Load();
+            if (manifest == null)
+            {
+                return result;
+            }
+
+            foreach (LauncherManifestAppInstallation app in manifest.InstallationList)
+            {
+                if (app.AppName.StartsWith("UE_"))
+                {
+                    // It's an engine install
+                    string trimmedName = app.AppName.Replace("UE_", "");
+                    result.Add(new Engine(app.InstallLocation)
+                    {
+                        Key = trimmedName
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        public static Engine? GetEngineInstallFromLauncherManifest(string engineAssociation)
+        {
+            return GetEngineInstallsFromLauncherManifest().Find(x => x.Key == engineAssociation);
+        }
+
+        public static List<Engine> GetEngineInstalls()
+        {
+            var installs = GetEngineInstallsFromRegistry();
+            installs.AddRange(GetEngineInstallsFromLauncherManifest());
+            return installs;
+        }
+
+        public static List<EngineVersion> GetLauncherEngineInstallVersions()
+        {
+            List<EngineVersion> versions = new();
+            foreach (Engine engine in GetEngineInstalls())
+            {
+                if (!engine.IsSourceBuild && engine.Version != null && !versions.Contains(engine.Version))
+                {
+                    versions.Add(engine.Version!);
+                }
+            }
+
+            // Present launcher installs oldest-first so the checklist reads naturally while still staying stable
+            // regardless of the order registry/manifest discovery happened to return.
+            return versions
+                .OrderBy(version => version.MajorVersion)
+                .ThenBy(version => version.MinorVersion)
+                .ThenBy(version => version.PatchVersion)
+                .ToList();
+        }
+
+        public static Engine GetDefaultEngineInstall()
+        {
+            return GetEngineInstalls().LastOrDefault() ?? throw new Exception("Could not find any Unreal Engine installations.");
+        }
+
+        public static Engine GetEngineInstall(string engineKey, bool defaultIfNotFound = false)
+        {
+            if (engineKey == null)
+            {
+                return GetDefaultEngineInstall();
+            }
+
+            // Check Contains so that engine with "5.0EA" satisfies search for "5.0"
+            Engine? engine = GetEngineInstalls().Find(x => x.Key.Contains(engineKey));
+            if (engine != null)
+            {
+                return engine;
+            }
+
+            if (defaultIfNotFound)
+            {
+                return GetDefaultEngineInstall();
+            }
+
+            throw new Exception("Could not find Engine installation based on EngineKey: + " + engineKey);
+        }
+
+        public static Engine? GetEngineInstall(EngineVersion version)
+        {
+            if (version == null)
+            {
+                throw new Exception("Invalid version");
+            }
+
+            return GetEngineInstalls().Find(x => x.Version?.MinorVersionEquals(version) == true);
+        }
+
+        public static Engine GetRequiredEngineInstall(EngineVersion version)
+        {
+            return GetEngineInstall(version)
+                ?? throw new Exception($"Could not find Engine installation for version {version.MajorMinorString}");
+        }
+    }
+}

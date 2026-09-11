@@ -1,24 +1,10 @@
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LocalAutomation.Runtime;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes
 {
-    // Limit compiler selection to the small set of direct UBT flows that reliably honor it.
-    public enum UbtCompiler
-    {
-        Default,
-        Clang
-    }
-
-    // Limit C++ standard overrides to direct UBT flows that forward flags straight through to UnrealBuildTool.
-    public enum UbtCppStandard
-    {
-        Default,
-        Cpp17,
-        Cpp20
-    }
-
     [PersistedSettings("ubtCompiler")]
     public partial class UbtCompilerOptions : OperationOptions
     {

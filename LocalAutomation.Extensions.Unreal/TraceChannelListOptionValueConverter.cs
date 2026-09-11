@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using Newtonsoft.Json.Linq;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal;
 

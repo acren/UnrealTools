@@ -1,0 +1,42 @@
+using System;
+using System.Collections.Generic;
+
+namespace UnrealUtilities
+{
+    public class TraceChannel : IEquatable<TraceChannel>
+    {
+        public string Key { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+
+        public override string ToString()
+        {
+            return Label;
+        }
+
+        public bool Equals(TraceChannel? other)
+        {
+            return other != null && Key == other.Key;
+        }
+    }
+
+    public static class TraceChannels
+    {
+        public static readonly List<TraceChannel> Channels = new()
+        {
+            new TraceChannel { Key = "bookmark", Label = "Bookmark" },
+            new TraceChannel { Key = "counters", Label = "Counters" },
+            new TraceChannel { Key = "cpu", Label = "CPU" },
+            new TraceChannel { Key = "frame", Label = "Frame" },
+            new TraceChannel { Key = "file", Label = "File" },
+            new TraceChannel { Key = "gpu", Label = "GPU" },
+            new TraceChannel { Key = "log", Label = "Log" },
+            new TraceChannel { Key = "loadtime", Label = "Load Time" },
+            new TraceChannel { Key = "memory", Label = "Memory" },
+            new TraceChannel { Key = "object", Label = "Object" },
+            new TraceChannel { Key = "region", Label = "Region" },
+            new TraceChannel { Key = "rendercommands", Label = "Render Commands" },
+            new TraceChannel { Key = "rhicommands", Label = "RHI Commands" },
+            new TraceChannel { Key = "slate", Label = "Slate" }
+        };
+    }
+}

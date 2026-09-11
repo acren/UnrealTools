@@ -2,6 +2,7 @@ using System;
 using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
 using Serilog;
+using SystemUtilities.Processes;
 
 namespace LocalAutomation.Application;
 
@@ -61,6 +62,8 @@ public static class ProcessLoggingBootstrap
         {
             if (_loggerFactory == null)
             {
+                // Configure inherited Windows error policy before supported hosts can start unattended command trees.
+                ProcessExecutor.ConfigureUnattendedWindowsErrors();
                 Serilog.ILogger sharedProcessOutputLogger = CreateSharedProcessOutputLogger(
                     applicationLogSink,
                     launchLogFilePath,

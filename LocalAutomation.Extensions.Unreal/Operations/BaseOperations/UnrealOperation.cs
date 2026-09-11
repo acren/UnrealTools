@@ -3,7 +3,7 @@ using System.Linq;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Runtime;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 #nullable enable
 
@@ -29,7 +29,7 @@ public abstract class UnrealOperation : global::LocalAutomation.Runtime.Operatio
     /// <summary>
     /// Returns the effective Unreal engine install for the current parameter state.
     /// </summary>
-    public UnrealAutomationCommon.Unreal.Engine? GetTargetEngineInstall(ValidatedOperationParameters operationParameters)
+    public Engine? GetTargetEngineInstall(ValidatedOperationParameters operationParameters)
     {
         EngineVersionOptions versionOptions = operationParameters.GetOptions<EngineVersionOptions>();
         if (versionOptions.EnabledVersions.Count > 0)
@@ -50,7 +50,7 @@ public abstract class UnrealOperation : global::LocalAutomation.Runtime.Operatio
     /// Returns the resolved Unreal engine install or throws when command generation is attempted before validation has
     /// guaranteed one exists.
     /// </summary>
-    protected UnrealAutomationCommon.Unreal.Engine GetRequiredTargetEngineInstall(ValidatedOperationParameters operationParameters)
+    protected Engine GetRequiredTargetEngineInstall(ValidatedOperationParameters operationParameters)
     {
         return GetTargetEngineInstall(operationParameters)
             ?? throw new InvalidOperationException("Operation requires a resolved Unreal engine install before execution.");

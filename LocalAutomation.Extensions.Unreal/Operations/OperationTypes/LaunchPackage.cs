@@ -1,13 +1,10 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
-using LocalAutomation.Extensions.Unreal.Unreal;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 using IPackageProvider = LocalAutomation.Extensions.Unreal.Targets.IPackageProvider;
 using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
@@ -42,7 +39,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         /// <summary>Builds a package launch command and releases any provider-created wrapper after reading its model.</summary>
-        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::SystemUtilities.Processes.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             T target = GetRequiredTarget(operationParameters);
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
@@ -50,11 +47,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
                 ?? throw new InvalidOperationException("Launch Package requires a packaged build before command generation.");
             // The selected target owns itself; only a distinct provider-created wrapper belongs to this call.
             using Package? ownedPackage = ReferenceEquals(package, target) ? null : package;
-            Arguments args = UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters));
-            args.SetFlag("windowed");
-            args.SetKeyValue("resx", "1920", false);
-            args.SetKeyValue("resy", "1080", false);
-            return new global::LocalAutomation.Commands.Command(package.Model.ExecutablePath, args.ToString());
+            return UnrealArguments.CreatePackageCommand(package.Model, CreateLaunchRequest(operationParameters));
         }
 
         protected override void DescribeExecutionPlan(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.ExecutionTaskBuilder root)
@@ -76,25 +69,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
                 // Release staged-package wrappers even when report-template preparation fails.
                 using Package? ownedPackage = ReferenceEquals(package, target) ? null : package;
 
-                // Packages don't have a test report template, but the engine still expects it
-                // Copy report template from engine to package, otherwise engine automation will error
-                var reportTemplateName = "Report-Template.html";
-                var reportTemplateSubdir = "Engine/Content/Automation";
-                string reportTemplateSubpath = Path.Combine(reportTemplateSubdir, reportTemplateName);
-                string packageDir = package.TargetDirectory;
-                string reportTemplateDir = Path.Combine(packageDir, reportTemplateSubdir);
-                string reportTemplatePath = Path.Combine(packageDir, reportTemplateSubpath);
-                if (!File.Exists(reportTemplatePath))
-                {
-                    string engineReportTemplate = Path.Combine(engine.TargetPath, reportTemplateSubpath);
-                    if (!File.Exists(engineReportTemplate))
-                    {
-                        throw new Exception("Expected engine report template");
-                    }
-
-                    Directory.CreateDirectory(reportTemplateDir);
-                    File.Copy(engineReportTemplate, reportTemplatePath);
-                }
+                package.Model.PrepareAutomationReportTemplate(engine);
             }
 
             return await ExecuteCommandAsync(context);

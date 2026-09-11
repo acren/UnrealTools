@@ -1,11 +1,12 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using LocalAutomation.Commands;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using Microsoft.Extensions.Logging;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
 {
@@ -59,36 +60,51 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
                 });
         }
 
-        protected virtual void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
+        /// <summary>Binds persisted launch options and host output allocation to the independent request.</summary>
+        protected UnrealLaunchRequest CreateLaunchRequest(global::LocalAutomation.Runtime.ValidatedOperationParameters parameters, bool includeProjectPath = false)
+        {
+            FlagOptions flags = parameters.GetOptions<FlagOptions>();
+            AutomationOptions automation = parameters.GetOptions<AutomationOptions>();
+            return new UnrealLaunchRequest
+            {
+                ProjectDescriptorPath = includeProjectPath && parameters.Target is Targets.Project project ? project.Model.UProjectPath : null,
+                TraceChannels = parameters.GetOptions<InsightsOptions>().TraceChannels.ToArray(),
+                StompMalloc = flags.StompMalloc,
+                WaitForAttach = flags.WaitForAttach,
+                NoMessaging = flags.NoMessaging,
+                DdcForceMemoryCache = flags.DdcForceMemoryCache,
+                Multiprocess = flags.Multiprocess,
+                AutomationFilter = automation.RunTests ? automation.TestFilter : null,
+                Headless = automation.Headless,
+                ReportOutputDirectory = automation.RunTests ? OutputPaths.GetTestReportPath(GetOutputPath(parameters)) : null
+            };
+        }
+
+        /// <summary>Reads the executed command's report output with the selected engine and maps results to task failure.</summary>
+        protected virtual void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Command command, global::LocalAutomation.Runtime.OperationResult result)
         {
             // Report test results
             AutomationOptions automationOptions = operationParameters.GetOptions<AutomationOptions>();
             if (!result.WasCancelled && automationOptions.RunTests)
             {
-                if (operationParameters.Target is not IEngineInstanceProvider engineInstanceProvider)
+                Engine engine = GetRequiredTargetEngineInstall(operationParameters);
+                // ReportExportPath can be overridden during finalization; read the directory Unreal actually received.
+                Arguments arguments = new();
+                arguments.AddRawArgsString(command.Arguments);
+                string? reportDirectory = arguments.GetArgument("ReportExportPath")?.Value;
+                if (string.IsNullOrWhiteSpace(reportDirectory))
                 {
-                    throw new Exception("Target does not provide engine install");
-                }
-                Engine? engine = engineInstanceProvider.EngineInstance;
-                if (engine == null)
-                {
-                    throw new Exception("Target could not resolve an engine install");
+                    throw new InvalidOperationException("Automation command requires a ReportExportPath.");
                 }
 
-                bool engineSupportsReports = engine.SupportsTestReports;
-                if (!engineSupportsReports)
+                string reportFilePath = Path.Combine(reportDirectory, "index.json");
+                TestReport? report = TestReport.ReadRequiredReport(reportFilePath, engine);
+                if (report == null)
                 {
                     context.Logger.LogWarning("Engine version does not support test reports, so results cannot be checked");
                 }
                 else
                 {
-                    string reportFilePath = OutputPaths.GetTestReportFilePath(GetOutputPath(operationParameters));
-                    TestReport? report = TestReport.Load(reportFilePath);
-                    if (report == null)
-                    {
-                        throw new Exception("Expected test report at " + reportFilePath + " but didn't find one");
-                    }
-
                     foreach (Test test in report.Tests)
                     {
                         context.Logger.Log(test.State == TestState.Success ? LogLevel.Information : LogLevel.Error, EnumUtils.GetName(test.State).ToUpperInvariant().PadRight(7) + " - " + test.FullTestPath);
@@ -105,7 +121,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
                     bool allPassed = testsPassed == report.Tests.Count;
                     context.Logger.Log(allPassed ? LogLevel.Information : LogLevel.Error, testsPassed + " of " + report.Tests.Count + " tests passed");
 
-                    if (report.Failed > 0)
+                    if (report.HasFailures)
                     {
                         throw new Exception("Tests failed");
                     }

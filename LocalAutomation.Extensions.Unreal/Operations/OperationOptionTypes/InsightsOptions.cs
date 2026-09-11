@@ -4,7 +4,7 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using LocalAutomation.Extensions.Unreal.Operations.OptionChoiceSources;
 using LocalAutomation.Runtime;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes

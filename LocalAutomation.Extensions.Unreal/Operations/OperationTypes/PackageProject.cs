@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
 {
@@ -29,35 +29,22 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         /// <summary>
-        /// Full project packaging remains a single BuildCookRun command for callers outside Deploy Plugin, but the shared
-        /// request now carries the exact BuildCookRun command settings directly so the base class does not need to read
-        /// package or cook option models.
+        /// Binds package and cooker options to the reusable full-project packaging preset.
         /// </summary>
         protected override BuildCookRunProjectRequest GetBuildCookRunRequest(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
-            BuildCookRunProjectPhases phases = BuildCookRunProjectPhases.Cook
-                | BuildCookRunProjectPhases.Stage
-                | BuildCookRunProjectPhases.Pak
-                | BuildCookRunProjectPhases.Package;
-            if (operationParameters.GetOptions<PackageOptions>().Build)
-            {
-                phases |= BuildCookRunProjectPhases.Build;
-            }
-
             PackageOptions packageOptions = operationParameters.GetOptions<PackageOptions>();
             CookOptions cookOptions = operationParameters.GetOptions<CookOptions>();
-            BuildConfiguration cookerConfiguration = cookOptions.CookerConfiguration;
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
 
-            /* Package Project still exposes the user-facing package and cook option sets, but it now translates those
-               values into one self-contained BuildCookRun request before the shared base assembles UAT arguments. */
-            return new BuildCookRunProjectRequest(
-                phases,
+            return UATArguments.CreateProjectPackageRequest(
+                engine,
                 configuration: operationParameters.GetOptions<BuildConfigurationOptions>().Configuration,
+                build: packageOptions.Build,
                 noDebugInfo: packageOptions.NoDebugInfo,
                 archiveDirectory: packageOptions.Archive ? GetOutputPath(operationParameters) : null,
-                unrealExePath: cookerConfiguration != BuildConfiguration.Development ? engine.GetEditorCmdExe(cookerConfiguration) : null,
-                additionalCookerOptions: cookOptions.WaitForAttach ? "-waitforattach" : null);
+                cookerConfiguration: cookOptions.CookerConfiguration,
+                waitForAttach: cookOptions.WaitForAttach);
         }
 
         protected override string GetOperationName()

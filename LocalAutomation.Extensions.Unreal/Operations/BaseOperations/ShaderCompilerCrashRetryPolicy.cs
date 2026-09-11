@@ -1,5 +1,6 @@
 using System;
 using LocalAutomation.Runtime;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
 {
@@ -13,11 +14,10 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
             shouldRetry: Matches,
             getDelay: context => TimeSpan.FromSeconds(1 << context.AttemptNumber));
 
+        /// <summary>Adapts attempt diagnostics to the independent shader crash classifier.</summary>
         private static bool Matches(ExecutionRetryContext context)
         {
-            string failureText = RetryFailureText.Build(context);
-            return RetryFailureText.Contains(failureText, "ShaderCompileWorker failed")
-                || RetryFailureText.Contains(failureText, "Crash inside the platform compiler");
+            return UnrealFailureClassifier.IsShaderCompilerCrash(RetryFailureText.Build(context));
         }
     }
 }

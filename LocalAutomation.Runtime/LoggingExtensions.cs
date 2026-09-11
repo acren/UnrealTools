@@ -1,7 +1,7 @@
 using System;
 using System.Diagnostics;
-using LocalAutomation.Core;
 using Microsoft.Extensions.Logging;
+using SystemUtilities.Formatting;
 
 namespace LocalAutomation.Runtime;
 

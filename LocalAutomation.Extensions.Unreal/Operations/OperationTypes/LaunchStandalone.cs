@@ -1,9 +1,7 @@
 using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using LocalAutomation.Extensions.Unreal.Unreal;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -21,16 +19,11 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         /// <summary>Launches the selected editor binary in standalone-game mode using the requested configuration.</summary>
-        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::SystemUtilities.Processes.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
-            Arguments args = UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters), true);
-            args.SetFlag("game");
-            args.SetFlag("windowed");
-            args.SetKeyValue("resx", "1920", false);
-            args.SetKeyValue("resy", "1080", false);
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             BuildConfiguration configuration = operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration;
-            return new global::LocalAutomation.Commands.Command(engine.GetEditorExe(configuration), args.ToString());
+            return UnrealArguments.CreateStandaloneCommand(engine, configuration, CreateLaunchRequest(operationParameters, includeProjectPath: true));
         }
     }
 }

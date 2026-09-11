@@ -8,8 +8,8 @@ using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
 using Microsoft.Extensions.Logging;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -17,7 +17,6 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
     [Operation(SortOrder = 9)]
     public class PackagePlugin : UnrealOperation<Plugin>
     {
-        private List<string> _requestedTargetPlatforms = new();
         private List<string> _builtTargetPlatforms = new();
 
         /// <summary>
@@ -71,57 +70,53 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
                 return null;
             }
 
-            return PluginBuildPlatformValidation.CheckRequirementsSatisfied(operationParameters, engine);
+            PluginBuildOptions options = operationParameters.GetOptions<PluginBuildOptions>();
+            return PluginBuildPlatformValidation.CheckRequirementsSatisfied(engine,
+                PluginBuildPlatformValidation.GetRequestedTargetPlatforms(options.BuildWin64, options.BuildLinux,
+                    operationParameters.GetOptions<AdditionalArgumentsOptions>().Arguments));
         }
 
+        /// <summary>Binds packaging inputs and resets the platform observations used by process-result validation.</summary>
         private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             // Package the plugin into a distributable output folder through UAT's BuildPlugin flow.
             PluginBuildOptions pluginBuildOptions = operationParameters.GetOptions<PluginBuildOptions>();
-            Arguments buildPluginArguments = BuildPluginArguments(operationParameters, pluginBuildOptions);
-            _requestedTargetPlatforms = PluginBuildPlatformValidation.GetRequestedTargetPlatforms(buildPluginArguments);
+            Engine engine = GetRequiredTargetEngineInstall(operationParameters);
+            Arguments buildPluginArguments = UATArguments.CreateBuildPluginArguments(GetRequiredTarget(operationParameters).Model,
+                engine, GetOutputPath(operationParameters),
+                PluginBuildPlatformValidation.GetSelectedTargetPlatforms(pluginBuildOptions.BuildWin64, pluginBuildOptions.BuildLinux),
+                pluginBuildOptions.StrictIncludes);
             _builtTargetPlatforms = new List<string>();
-            return new Command(GetRequiredTargetEngineInstall(operationParameters).GetRunUATPath(), buildPluginArguments.ToString());
+            return new Command(engine.GetRunUATPath(), buildPluginArguments.ToString());
         }
 
         // Track Unreal's reported target platform list as it streams by so we do not need to retain the full log.
         private void OnOutputLine(string line)
         {
-            const string prefix = "Building plugin for target platforms:";
-            int prefixIndex = line.IndexOf(prefix, StringComparison.InvariantCultureIgnoreCase);
-            if (prefixIndex < 0)
+            if (PluginBuildPlatformValidation.TryParseBuiltTargetPlatforms(line, out List<string> platforms))
             {
-                return;
+                _builtTargetPlatforms = platforms;
             }
-
-            string builtPlatformsValue = line.Substring(prefixIndex + prefix.Length).Trim();
-            _builtTargetPlatforms = string.IsNullOrWhiteSpace(builtPlatformsValue)
-                ? new List<string>()
-                : builtPlatformsValue
-                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(platform => platform.Trim())
-                    .Where(platform => !string.IsNullOrWhiteSpace(platform))
-                    .Distinct(StringComparer.InvariantCultureIgnoreCase)
-                    .ToList();
         }
 
-        // Compare Unreal's reported target platform list with what the user requested so silent skips become failures.
-        private void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, global::LocalAutomation.Runtime.OperationResult result)
+        // Compare reported platforms with the executed request, including overrides, so silent skips become failures.
+        private void OnProcessEnded(global::LocalAutomation.Runtime.ExecutionTaskContext context, global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Command command, global::LocalAutomation.Runtime.OperationResult result)
         {
+            Arguments arguments = new();
+            arguments.AddRawArgsString(command.Arguments);
+            List<string> requestedTargetPlatforms = PluginBuildPlatformValidation.GetRequestedTargetPlatforms(arguments);
             using PerformanceActivityScope activity = PerformanceTelemetry.StartActivity("PackagePlugin.OnProcessEnded")
                 .SetTag("result.outcome", result.Outcome.ToString())
                 .SetTag("result.was_cancelled", result.WasCancelled)
-                .SetTag("requested_platform.count", _requestedTargetPlatforms.Count);
+                .SetTag("requested_platform.count", requestedTargetPlatforms.Count);
 
-            if (result.Outcome != global::LocalAutomation.Runtime.ExecutionTaskOutcome.Completed || result.WasCancelled || _requestedTargetPlatforms.Count == 0)
+            if (result.Outcome != global::LocalAutomation.Runtime.ExecutionTaskOutcome.Completed || result.WasCancelled || requestedTargetPlatforms.Count == 0)
             {
                 activity.SetTag("validation.skipped", true);
                 return;
             }
 
-            List<string> skippedPlatforms = _requestedTargetPlatforms
-                .Where(requestedPlatform => !_builtTargetPlatforms.Contains(requestedPlatform, StringComparer.InvariantCultureIgnoreCase))
-                .ToList();
+            List<string> skippedPlatforms = PluginBuildPlatformValidation.GetSkippedTargetPlatforms(requestedTargetPlatforms, _builtTargetPlatforms);
             activity.SetTag("built_platform.count", _builtTargetPlatforms.Count)
                 .SetTag("skipped_platform.count", skippedPlatforms.Count);
 
@@ -133,7 +128,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             context.Logger.LogError(
                 "Unreal BuildPlugin skipped requested target platform(s): {Platforms}. Requested: {Requested}. Built: {Built}.",
                 string.Join(", ", skippedPlatforms),
-                string.Join(", ", _requestedTargetPlatforms),
+                string.Join(", ", requestedTargetPlatforms),
                 _builtTargetPlatforms.Count > 0 ? string.Join(", ", _builtTargetPlatforms) : "none");
             result.Outcome = global::LocalAutomation.Runtime.ExecutionTaskOutcome.Failed;
         }
@@ -143,27 +138,5 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             return "Package Plugin";
         }
 
-        // Build the final UAT argument list once so validation and execution inspect the same effective request.
-        private Arguments BuildPluginArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, PluginBuildOptions pluginBuildOptions)
-        {
-            Plugin plugin = GetRequiredTarget(operationParameters);
-            Arguments buildPluginArguments = new();
-            buildPluginArguments.SetArgument("BuildPlugin");
-            buildPluginArguments.SetKeyPath("Plugin", plugin.Model.UPluginPath);
-            buildPluginArguments.SetKeyPath("Package", GetOutputPath(operationParameters));
-            buildPluginArguments.SetFlag("Rocket");
-
-            // UAT BuildPlugin already passes -NoHotReload to every UBT invocation it owns.
-            List<string> selectedPlatforms = PluginBuildPlatformValidation.GetSelectedTargetPlatforms(pluginBuildOptions);
-            buildPluginArguments.SetKeyValue("TargetPlatforms", string.Join('+', selectedPlatforms));
-
-            if (pluginBuildOptions.StrictIncludes)
-            {
-                buildPluginArguments.SetFlag("StrictIncludes");
-            }
-
-            buildPluginArguments.ApplyCommonUATArguments(GetRequiredTargetEngineInstall(operationParameters));
-            return buildPluginArguments;
-        }
     }
 }

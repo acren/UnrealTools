@@ -3,8 +3,8 @@ using System.Linq;
 using LocalAutomation.Commands;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 using RuntimeTarget = LocalAutomation.Runtime.OperationTarget;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
@@ -71,34 +71,19 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
                 return null;
             }
 
-            // UE 5.5 and newer have dropped Cpp17 support, so fail early before invoking UBT with an invalid override.
-            EngineVersion engineVersion = engine.Version;
-            if (buildBatOptions.CppStandard == UbtCppStandard.Cpp17 && engineVersion >= new EngineVersion(5, 5, 0))
-            {
-                return $"C++17 is not supported for Unreal Engine {engineVersion.MajorMinorString} or newer";
-            }
-
-            if (buildBatOptions.Compiler == UbtCompiler.Clang)
-            {
-                // Clang builds need the selected engine's preferred family before UBT is launched.
-                string? compilerVersionError = UbtClangToolchainPreferences.TryGetPreferredToolchain(engine, out _, out _);
-                if (compilerVersionError != null)
-                {
-                    return compilerVersionError;
-                }
-            }
-
-            return null;
+            return UbtArguments.CheckCompilerRequirements(engine, buildBatOptions.Compiler, buildBatOptions.CppStandard);
         }
 
+        /// <summary>Binds compiler options and the selected engine to a direct UBT command with child-only LLVM settings.</summary>
         private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
-            Arguments args = new();
-
             // Let derived operations describe the target-specific portion of the Build.bat invocation first.
-            ConfigureBuildArguments(operationParameters, args);
-            string? clangToolchainRoot = ApplySharedBuildArguments(operationParameters, args);
-            Command command = new(GetRequiredTargetEngineInstall(operationParameters).GetBuildPath(), args.ToString());
+            Arguments args = CreateBuildArguments(operationParameters);
+            Engine engine = GetRequiredTargetEngineInstall(operationParameters);
+            UbtCompilerOptions compilerOptions = operationParameters.GetOptions<UbtCompilerOptions>();
+            string? clangToolchainRoot = UbtArguments.ApplySharedBuildArguments(args, engine,
+                compilerOptions.Compiler, compilerOptions.CppStandard, operationParameters.GetOptions<BuildOptions>().NoHotReload);
+            Command command = new(engine.GetBuildPath(), args.ToString());
             if (!string.IsNullOrWhiteSpace(clangToolchainRoot))
             {
                 // UBT reads LLVM_PATH while discovering Clang, so set it only for this Build.bat process.
@@ -109,8 +94,9 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
         }
 
         // Derived operations provide the target-specific portion of the direct Build.bat invocation.
-        protected virtual void ConfigureBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
+        protected virtual Arguments CreateBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
+            return new Arguments();
         }
 
         // Raw generic Build.bat children need a readable operation name even though the generic type name includes arity.
@@ -124,47 +110,5 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
             return base.GetOperationName();
         }
 
-        // Apply the shared direct-UBT overrides only for Build.bat flows that are known to respect them.
-        protected string? ApplySharedBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
-        {
-            BuildOptions buildOptions = operationParameters.GetOptions<BuildOptions>();
-            UbtCompilerOptions buildBatOptions = operationParameters.GetOptions<UbtCompilerOptions>();
-            UbtCompiler compiler = buildBatOptions.Compiler;
-            UbtCppStandard cppStandard = buildBatOptions.CppStandard;
-            string? clangToolchainRoot = null;
-
-            // Automation builds can explicitly disable UnrealBuildTool hot reload.
-            if (buildOptions.NoHotReload)
-            {
-                args.SetFlag("NoHotReload");
-            }
-
-            // Only emit an explicit compiler flag when the user has opted out of the engine default behavior.
-            if (compiler != UbtCompiler.Default)
-            {
-                args.SetKeyValue("Compiler", compiler.ToString());
-            }
-
-            if (compiler == UbtCompiler.Clang)
-            {
-                Engine engine = GetRequiredTargetEngineInstall(operationParameters);
-                string? compilerVersionError = UbtClangToolchainPreferences.TryGetPreferredToolchain(engine, out string compilerVersion, out clangToolchainRoot);
-                if (compilerVersionError != null)
-                {
-                    throw new System.InvalidOperationException(compilerVersionError);
-                }
-
-                // Pin UBT to the engine-preferred Clang family so it cannot auto-select a later unsupported family.
-                args.SetKeyValue("CompilerVersion", compilerVersion);
-            }
-
-            // Only emit an explicit language standard when the user has selected one of the supported UBT values.
-            if (cppStandard != UbtCppStandard.Default)
-            {
-                args.SetKeyValue("CppStdEngine", cppStandard.ToString());
-            }
-
-            return clangToolchainRoot;
-        }
     }
 }

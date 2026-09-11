@@ -2,9 +2,9 @@ using System;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Newtonsoft.Json;
-using UnrealAutomationCommon.Unreal;
-using EngineModel = UnrealAutomationCommon.Unreal.Engine;
-using PackageModel = UnrealAutomationCommon.Unreal.Package;
+using UnrealUtilities;
+using EngineModel = UnrealUtilities.Engine;
+using PackageModel = UnrealUtilities.Package;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 

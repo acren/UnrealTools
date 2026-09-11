@@ -1,8 +1,7 @@
 using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using LocalAutomation.Extensions.Unreal.Unreal;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 using EngineTarget = LocalAutomation.Extensions.Unreal.Targets.Engine;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
@@ -20,11 +19,11 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         /// <summary>Resolves the selected editor configuration before constructing the launch command.</summary>
-        protected override global::LocalAutomation.Commands.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::SystemUtilities.Processes.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             BuildConfiguration configuration = operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration;
-            return new global::LocalAutomation.Commands.Command(engine.GetEditorExe(configuration), UnrealArguments.MakeArguments(operationParameters, GetOutputPath(operationParameters), true).ToString());
+            return UnrealArguments.CreateEditorCommand(engine, configuration, CreateLaunchRequest(operationParameters, includeProjectPath: true));
         }
     }
 

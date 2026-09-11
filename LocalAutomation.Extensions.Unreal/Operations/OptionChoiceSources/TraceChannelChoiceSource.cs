@@ -1,5 +1,6 @@
 using System.Collections;
 using LocalAutomation.Runtime;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OptionChoiceSources;
 
@@ -13,6 +14,6 @@ public sealed class TraceChannelChoiceSource : IChoiceCollectionSource
     /// </summary>
     public IEnumerable GetChoices(object? component, string propertyName)
     {
-        return UnrealAutomationCommon.Unreal.TraceChannels.Channels;
+        return TraceChannels.Channels;
     }
 }

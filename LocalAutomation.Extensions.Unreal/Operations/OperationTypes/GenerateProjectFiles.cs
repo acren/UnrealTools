@@ -1,8 +1,8 @@
 using LocalAutomation.Commands;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -22,12 +22,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         private Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Project project = GetRequiredTarget(operationParameters);
-            Arguments args = new();
-            args.SetFlag("projectfiles");
-            args.SetKeyPath("project", project.Model.UProjectPath);
-            args.SetFlag("game");
-            args.SetFlag("rocket");
-            args.SetFlag("progress");
+            Arguments args = UbtArguments.CreateProjectFilesArguments(project.Model);
             return new Command(GetRequiredTargetEngineInstall(operationParameters).GetUBTExe(), args.ToString());
         }
     }

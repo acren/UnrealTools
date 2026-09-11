@@ -1,10 +1,8 @@
-using System;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
@@ -28,26 +26,25 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             Plugin plugin = GetRequiredTarget(operationParameters);
             activity.SetTag("plugin.path", plugin.Model.PluginPath)
                 .SetTag("descriptor.path", plugin.Model.UPluginPath);
-            if (plugin.Model.IsBlueprintOnly)
+            // Resolve host inputs only after the code-plugin prerequisite, keeping invalid inputs out of engine lookup.
+            Project? hostProject = plugin.Model.IsBlueprintOnly ? null : plugin.GetHostProjectForDiagnostics();
+            Engine? engine = null;
+            if (hostProject != null)
             {
-                activity.SetTag("result", "Build Plugin only supports code plugins");
-                return "Build Plugin only supports code plugins";
+                activity.SetTag("host_project.path", hostProject.Model.ProjectPath);
+                if (hostProject.IsValid)
+                {
+                    // Validation and command construction share explicit operation engine selection.
+                    engine = GetTargetEngineInstall(operationParameters);
+                    activity.SetTag("engine.name", engine?.DisplayName ?? string.Empty);
+                }
             }
 
-            Project hostProject = plugin.GetHostProjectForDiagnostics();
-            activity.SetTag("host_project.path", hostProject.Model.ProjectPath);
-            if (!hostProject.IsValid)
+            string? pluginRequirementsError = UbtArguments.CheckPluginBuildRequirements(plugin.Model, hostProject?.Model, engine);
+            if (pluginRequirementsError != null)
             {
-                activity.SetTag("result", "Build Plugin requires the plugin to live inside a valid host project");
-                return "Build Plugin requires the plugin to live inside a valid host project";
-            }
-
-            Engine? engine = hostProject.GetEngineInstanceForDiagnostics();
-            activity.SetTag("engine.name", engine?.DisplayName ?? string.Empty);
-            if (engine == null)
-            {
-                activity.SetTag("result", "Build Plugin could not resolve a host project engine install");
-                return "Build Plugin could not resolve a host project engine install";
+                activity.SetTag("result", pluginRequirementsError);
+                return pluginRequirementsError;
             }
 
             string? buildBatRequirementsError = base.CheckRequirementsSatisfied(operationParameters);
@@ -63,21 +60,13 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         // Build the plugin against its host project through Build.bat so plugin compilation stays in place.
-        protected override void ConfigureBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters, Arguments args)
+        protected override Arguments CreateBuildArguments(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Plugin plugin = GetRequiredTarget(operationParameters);
             Project hostProject = plugin.GetHostProjectForDiagnostics();
-            if (!hostProject.IsValid)
-            {
-                throw new InvalidOperationException("Build Plugin requires a valid host project before command generation.");
-            }
-
-            // Match Unreal's direct plugin build flow: editor target, platform, configuration, host project, then plugin path.
-            args.SetArgument(GetRequiredTargetEngineInstall(operationParameters).BaseEditorName);
-            args.SetArgument("Win64");
-            args.SetArgument(operationParameters.GetOptions<BuildConfigurationOptions>().Configuration.ToString());
-            args.SetPath(hostProject.Model.UProjectPath);
-            args.SetKeyPath("plugin", plugin.Model.UPluginPath);
+            return UbtArguments.CreatePluginBuildArguments(plugin.Model, hostProject.Model,
+                GetRequiredTargetEngineInstall(operationParameters),
+                operationParameters.GetOptions<BuildConfigurationOptions>().Configuration);
         }
     }
 }

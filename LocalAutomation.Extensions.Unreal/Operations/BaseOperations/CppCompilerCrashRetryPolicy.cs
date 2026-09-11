@@ -1,5 +1,6 @@
 using System;
 using LocalAutomation.Runtime;
+using SystemUtilities.Diagnostics;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
 {
@@ -21,15 +22,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
         /// </summary>
         private static bool Matches(ExecutionRetryContext context)
         {
-            string failureText = RetryFailureText.Build(context);
-
-            // Match vendor diagnostics rather than generic exit codes so deterministic compile failures remain terminal.
-            bool clangFrontendCrash =
-                RetryFailureText.Contains(failureText, "PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/")
-                && RetryFailureText.Contains(failureText, "clang frontend command failed due to signal");
-            bool msvcInternalCompilerError =
-                RetryFailureText.Contains(failureText, "fatal error C1001: Internal compiler error");
-            return clangFrontendCrash || msvcInternalCompilerError;
+            return CppCompilerFailure.Matches(RetryFailureText.Build(context));
         }
     }
 }

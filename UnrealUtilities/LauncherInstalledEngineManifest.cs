@@ -1,0 +1,24 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Newtonsoft.Json;
+
+namespace UnrealUtilities
+{
+    public class LauncherInstalledEngineManifest
+    {
+        public static string ManifestPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Epic\\UnrealEngineLauncher\\LauncherInstalled.dat");
+        public List<LauncherManifestAppInstallation> InstallationList { get; set; } = new();
+
+        public static LauncherInstalledEngineManifest? Load()
+        {
+            return JsonConvert.DeserializeObject<LauncherInstalledEngineManifest>(File.ReadAllText(ManifestPath));
+        }
+    }
+
+    public class LauncherManifestAppInstallation
+    {
+        public string AppName = string.Empty;
+        public string InstallLocation = string.Empty;
+    }
+}

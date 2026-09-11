@@ -1,6 +1,6 @@
 using System;
 using System.IO;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 
 namespace LocalAutomation.Extensions.Unreal.Unreal
 {

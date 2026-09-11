@@ -2,19 +2,15 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
 using LocalAutomation.Commands;
-using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
 using Microsoft.Extensions.Logging;
-using Semver;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using UnrealUtilities;
 using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
 using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
@@ -178,29 +174,14 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             EngineVersion resolvedEngineVersion = engine.Version ?? throw new Exception("Engine version is not available");
             context.Logger.LogInformation($"Verifying plugin {plugin.Name} for {resolvedEngineVersion.MajorMinorString}");
 
-            UnrealAutomationCommon.Unreal.Plugin? installedPlugin = engine.FindInstalledPlugin(plugin.Name);
-
-            if (installedPlugin is null)
-            {
-                throw new Exception($"Could not find plugin {plugin.Name} in engine located at {engine.TargetPath}");
-            }
-
-            string pluginVersionName = (plugin.Model.PluginDescriptor ?? throw new Exception("Plugin descriptor is not loaded")).VersionName;
+            UnrealUtilities.Plugin installedPlugin = DeploymentVerification.ValidateInstalledPlugin(plugin.Model, engine);
+            string pluginVersionName = plugin.Model.PluginDescriptor.VersionName;
             context.Logger.LogInformation($"Source plugin version: {pluginVersionName}");
             string installedPluginVersionName = (installedPlugin.PluginDescriptor ?? throw new Exception("Installed plugin descriptor is not loaded")).VersionName;
             context.Logger.LogInformation($"Installed plugin version: {installedPluginVersionName}");
 
-            if (!installedPluginVersionName.Contains(pluginVersionName))
-            {
-                throw new Exception($"Installed plugin version {installedPluginVersionName} does not include reference version {pluginVersionName}");
-            }
-
             string exampleProjects = GetNormalizedExampleProjectsPath(operationParameters);
-            string exampleProjectZip = FindExampleProjectZip(plugin, exampleProjects, engine);
-            if (exampleProjectZip == null)
-            {
-                throw new Exception($"Could not find example project zip in {exampleProjects}");
-            }
+            string exampleProjectZip = DeploymentVerification.FindExampleProjectZip(plugin.Model, exampleProjects, engine);
 
             context.Logger.LogInformation($"Identified {exampleProjectZip} as best example project");
 
@@ -209,18 +190,9 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             string temp = GetEngineBranchTempPath(context, resolvedEngineVersion);
             string exampleProjectSourcePath = Path.Combine(temp, "ExampleProjectSource");
 
-            // The archive is unpacked into a disposable source copy so the persistent workspace can be refreshed from a
-            // clean project input while keeping generated workspace outputs reusable across verification runs.
-            FileUtils.DeleteDirectoryIfExists(exampleProjectSourcePath);
-            ZipFile.ExtractToDirectory(exampleProjectZip, exampleProjectSourcePath);
-
             // Archive inspection supplies a standalone model; only the prepared operation target needs a watcher.
-            UnrealAutomationCommon.Unreal.Project sourceProject = new(exampleProjectSourcePath);
-
-            if (!sourceProject.IsValid)
-            {
-                throw new Exception($"Couldn't create project from {exampleProjectZip}");
-            }
+            UnrealUtilities.Project sourceProject = DeploymentVerification.ExtractExampleProject(
+                exampleProjectZip, exampleProjectSourcePath, context.Logger, context.CancellationToken);
 
             global::LocalAutomation.Runtime.Workspace preparedWorkspace = global::LocalAutomation.Runtime.Workspaces.Persistent(UnrealWorkspaceKeys.ProjectWorkspace(
                 engine,
@@ -229,25 +201,9 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
                 compiler: UbtCompiler.Default,
                 cppStandard: UbtCppStandard.Default));
 
-            IReadOnlySet<string> includedPluginNames = MaterializationSpecs.GetProjectPluginNames(sourceProject);
-            // Prepared workspaces carry archived project-plugin binaries so Unreal can load enabled project plugins before
-            // later direct target builds refresh project-owned receipts and executables.
-            FileMaterializationSpec projectInputs = MaterializationSpecs.CreateProject(sourceProject, includedPluginNames, includePluginBuildOutputs: true);
             preparedWorkspace.EnsureReady(context.Logger);
-            context.Logger.LogInformation("Refreshing verification project workspace from '{SourceProjectPath}' to '{WorkspacePath}'.", sourceProject.ProjectPath, preparedWorkspace.RootPath);
-            FileUtils.MaterializeDirectory(sourceProject.ProjectPath, preparedWorkspace.RootPath, projectInputs, context.Logger, context.CancellationToken, mirrorDirectories: true);
-
-            if (!ProjectPaths.Instance.IsTargetDirectory(preparedWorkspace.RootPath))
-            {
-                throw new InvalidOperationException($"Verification project workspace is not a valid project after refresh: {preparedWorkspace.RootPath}");
-            }
-
-            Project exampleProject = new(preparedWorkspace.RootPath);
-
-            if (!exampleProject.IsValid)
-            {
-                throw new Exception($"Couldn't create project from prepared workspace {preparedWorkspace.RootPath}");
-            }
+            Project exampleProject = new(DeploymentVerification.PrepareProject(
+                sourceProject, preparedWorkspace.RootPath, context.Logger, context.CancellationToken));
 
             string packageOutput = Path.Combine(temp, "Package");
 
@@ -331,56 +287,21 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         {
             // Package and cook outputs are owned by this execution session; clearing them before UAT starts makes package
             // discovery represent the current verification run only.
-            FileUtils.DeleteDirectoryIfExists(state.PackageOutputPath);
-            string savedPath = Path.Combine(state.ExampleProject.Model.ProjectPath, "Saved");
-            FileUtils.DeleteDirectoryIfExists(Path.Combine(savedPath, "StagedBuilds"), context.Logger);
-            FileUtils.DeleteDirectoryIfExists(Path.Combine(savedPath, "Cooked"), context.Logger);
+            ProjectPackaging.PreparePackageOutputs(state.ExampleProject.Model, state.PackageOutputPath,
+                context.Logger, context.CancellationToken);
 
             // UAT appends the platform beneath -stagingdirectory, while -CookOutputDir names the final platform folder.
-            string stagingRootPath = GetSessionPackageStagingRootPath(state);
-            string cookOutputPath = GetSessionPackageCookOutputPath(state);
+            string stagingRootPath = ProjectPackaging.GetStagingRootPath(state.PackageOutputPath);
+            string cookOutputPath = ProjectPackaging.GetCookOutputPath(state.PackageOutputPath, state.Engine);
 
             global::LocalAutomation.Runtime.OperationParameters packageParameters = CreateExampleProjectParams(state, outputPathOverride: state.PackageOutputPath);
             packageParameters.GetOptions<AdditionalArgumentsOptions>().Arguments = "-nocompileeditor";
             packageParameters.GetOptions<BuildConfigurationOptions>().Configuration = BuildConfiguration.Development;
             // The target build runs before this task, so BuildCookRun can skip compilation and keep UAT serialization
             // independent from the shared Unreal build lock.
-            BuildCookRunProjectRequest request = new(
-                BuildCookRunProjectPhases.Cook | BuildCookRunProjectPhases.Stage | BuildCookRunProjectPhases.Pak | BuildCookRunProjectPhases.Package,
-                configuration: BuildConfiguration.Development,
-                stagingDirectory: stagingRootPath,
-                cookOutputDirectory: cookOutputPath);
+            BuildCookRunProjectRequest request = ProjectPackaging.CreatePackageOnlyRequest(
+                BuildConfiguration.Development, stagingRootPath, cookOutputPath);
             await RunChildOperationAsync(new ConfiguredBuildCookRunProjectOperation("Package Example Project", request), packageParameters, context, required: true, failureMessage: "Failed to package example project", hideChildOperationRootInGraph: true);
-        }
-
-        /// <summary>
-        /// Returns the session-owned staging root that BuildCookRun should use for verification packaging.
-        /// </summary>
-        private static string GetSessionPackageStagingRootPath(VerificationState state)
-        {
-            return Path.Combine(state.PackageOutputPath, "StagedBuilds");
-        }
-
-        /// <summary>
-        /// Returns the platform-specific cooked-data directory for verification packaging.
-        /// </summary>
-        private static string GetSessionPackageCookOutputPath(VerificationState state)
-        {
-            return Path.Combine(state.PackageOutputPath, "Cooked", state.Engine.GetWindowsPlatformName());
-        }
-
-        /// <summary>
-        /// Returns the staged package directory produced under the session output root and validates it before launch.
-        /// </summary>
-        private static string GetRequiredSessionPackagePath(VerificationState state)
-        {
-            string packagePath = Path.Combine(GetSessionPackageStagingRootPath(state), state.Engine.GetWindowsPlatformName());
-            if (!PackagePaths.Instance.IsTargetDirectory(packagePath))
-            {
-                throw new InvalidOperationException($"Package output is not available for launch: {packagePath}");
-            }
-
-            return packagePath;
         }
 
         /// <summary>
@@ -392,7 +313,8 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
 
             // The package target points at the session staging output instead of the persistent project Saved directory so
             // launch validation cannot accidentally discover a package from a previous workspace use.
-            using Package package = new(GetRequiredSessionPackagePath(state));
+            using Package package = new(ProjectPackaging.GetRequiredPackagePath(
+                state.PackageOutputPath, state.Engine, "Package output is not available for launch"));
             global::LocalAutomation.Runtime.OperationParameters packageParameters = CreateParameters();
             packageParameters.Target = package;
             packageParameters.OutputPathOverride = Path.Combine(state.TempPath, "PackageLaunch");
@@ -438,65 +360,5 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             return operationParameters.GetOptions<VerifyDeploymentOptions>().ExampleProjectsPath.Trim();
         }
 
-        public readonly struct ExampleProjectZipInfo
-        {
-            public readonly string Path;
-            public readonly string PluginName;
-            public readonly SemVersion? PluginVersion;
-            public readonly SemVersion? EngineVersion;
-            public readonly bool IsExampleProject;
-
-            public ExampleProjectZipInfo(string path)
-            {
-                Path = path;
-                PluginName = string.Empty;
-                PluginVersion = null;
-                EngineVersion = null;
-                string zipName = System.IO.Path.GetFileNameWithoutExtension(path);
-
-                // Expect zip to be named PluginName_PluginVersion_EngineVersion_ExampleProject.zip
-                string[] split = zipName.Split('_');
-                IsExampleProject = split.Length > 3 && split[3] == "ExampleProject";
-                if (!IsExampleProject)
-                {
-                    return;
-                }
-                PluginName = split[0];
-                PluginVersion = split.Length > 1 ? SemVersion.Parse(split[1], SemVersionStyles.Any) : null;
-                EngineVersion = split.Length > 2 ? SemVersion.Parse(split[2].Replace("UE", ""), SemVersionStyles.Any) : null;
-            }
-        }
-
-        /// <summary>Selects the newest example archive compatible with the source plugin and verification engine.</summary>
-        private string FindExampleProjectZip(Plugin plugin, string exampleProjectsPath, Engine engine)
-        {
-            SemVersion pluginVersion = (plugin.Model.PluginDescriptor ?? throw new Exception("Plugin descriptor is not loaded")).SemVersion;
-            string exampleProjects = exampleProjectsPath;
-            string extension = "*.zip";
-            string[] zipPaths = Directory.GetFiles(exampleProjects, extension, SearchOption.AllDirectories);
-            List<ExampleProjectZipInfo> pluginExampleProjectZips = new();
-
-            foreach (string zipPath in zipPaths)
-            {
-                ExampleProjectZipInfo zipInfo = new(zipPath);
-                if (zipInfo.IsExampleProject && zipInfo.PluginName == plugin.Name)
-                {
-                    pluginExampleProjectZips.Add(zipInfo);
-                }
-            }
-
-            if (pluginExampleProjectZips.Count == 0)
-            {
-                throw new Exception("No valid zips");
-            }
-
-            ExampleProjectZipInfo selectedZip = pluginExampleProjectZips
-                .Where(z => z.PluginVersion != null && SemVersion.CompareSortOrder(z.PluginVersion, pluginVersion) <= 0 && z.EngineVersion != null && SemVersion.CompareSortOrder(z.EngineVersion, engine.SemVersion) <= 0)
-                .OrderByDescending(z => z.PluginVersion)
-                .ThenByDescending(z => z.EngineVersion)
-                .First();
-
-            return selectedZip.Path;
-        }
     }
 }

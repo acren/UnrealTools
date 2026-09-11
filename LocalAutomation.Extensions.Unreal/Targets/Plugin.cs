@@ -1,18 +1,18 @@
 using System;
 using System.IO;
 using LocalAutomation.Core;
-using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using UnrealAutomationCommon.Unreal;
-using EngineModel = UnrealAutomationCommon.Unreal.Engine;
-using PluginModel = UnrealAutomationCommon.Unreal.Plugin;
+using SystemUtilities.IO;
+using UnrealUtilities;
+using EngineModel = UnrealUtilities.Engine;
+using PluginModel = UnrealUtilities.Plugin;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 
-/// <summary>Owns plugin descriptor watching, runtime parent lifetime, and plugin deletion.</summary>
+/// <summary>Owns plugin descriptor watching and runtime parent lifetime.</summary>
 [Target]
 public class Plugin : OperationTarget, IEngineInstanceProvider, IDisposable
 {
@@ -172,12 +172,6 @@ public class Plugin : OperationTarget, IEngineInstanceProvider, IDisposable
 
             return _hostProject;
         }
-    }
-
-    /// <summary>Deletes the plugin directory using Core filesystem semantics.</summary>
-    public void DeletePlugin()
-    {
-        FileUtils.DeleteDirectory(Model.PluginPath);
     }
 
     /// <summary>Starts background descriptor refresh for UI-bound plugin state.</summary>

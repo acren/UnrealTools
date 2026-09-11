@@ -1,15 +1,13 @@
 using System;
-using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Newtonsoft.Json;
-using UnrealAutomationCommon.Unreal;
-using EngineModel = UnrealAutomationCommon.Unreal.Engine;
-using PluginModel = UnrealAutomationCommon.Unreal.Plugin;
+using UnrealUtilities;
+using EngineModel = UnrealUtilities.Engine;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 
-/// <summary>Provides runtime engine identity and installed-plugin filesystem management.</summary>
+/// <summary>Provides runtime engine identity for the installation model.</summary>
 [Target]
 public class Engine : OperationTarget, IEngineInstanceProvider
 {
@@ -49,13 +47,4 @@ public class Engine : OperationTarget, IEngineInstanceProvider
         throw new NotImplementedException();
     }
 
-    /// <summary>Removes an installed plugin's files from the engine installation.</summary>
-    public void UninstallPlugin(string pluginName)
-    {
-        PluginModel plugin = Model.FindInstalledPlugin(pluginName)
-            ?? throw new InvalidOperationException("Could not find plugin in installed plugins");
-        /* Uninstallation deletes plugin files. A plugin installed via Epic Launcher may remain registered there
-           because this filesystem operation does not change the launcher's installation records. */
-        FileUtils.DeleteDirectory(plugin.PluginPath);
-    }
 }

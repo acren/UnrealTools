@@ -5,106 +5,12 @@ using LocalAutomation.Commands;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
 using LocalAutomation.Runtime;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
 {
-    /// <summary>
-    /// Identifies the BuildCookRun phases a project operation should enable for one UAT invocation.
-    /// </summary>
-    [Flags]
-    public enum BuildCookRunProjectPhases
-    {
-        None = 0,
-        Build = 1 << 0,
-        Cook = 1 << 1,
-        Stage = 1 << 2,
-        Pak = 1 << 3,
-        Package = 1 << 4,
-    }
-
-    /// <summary>
-    /// Describes one complete project BuildCookRun invocation in terms of enabled phases and the explicit command
-    /// settings that should shape the generated UAT arguments.
-    /// </summary>
-    public readonly struct BuildCookRunProjectRequest
-    {
-        public BuildCookRunProjectRequest(
-            BuildCookRunProjectPhases phases,
-            BuildConfiguration configuration = BuildConfiguration.Development,
-            bool noDebugInfo = false,
-            string? archiveDirectory = null,
-            string? unrealExePath = null,
-            string? additionalCookerOptions = null,
-            string? stagingDirectory = null,
-            string? cookOutputDirectory = null)
-        {
-            Phases = phases;
-            Configuration = configuration;
-            NoDebugInfo = noDebugInfo;
-            ArchiveDirectory = archiveDirectory;
-            UnrealExePath = unrealExePath;
-            AdditionalCookerOptions = additionalCookerOptions;
-            StagingDirectory = stagingDirectory;
-            CookOutputDirectory = cookOutputDirectory;
-        }
-
-        /// <summary>
-        /// The explicit BuildCookRun phases to turn into UAT flags for this invocation.
-        /// </summary>
-        public BuildCookRunProjectPhases Phases { get; }
-
-        /// <summary>
-        /// The client and server configuration BuildCookRun should use for this invocation.
-        /// </summary>
-        public BuildConfiguration Configuration { get; }
-
-        /// <summary>
-        /// Controls whether BuildCookRun should omit debug symbols from the packaged output.
-        /// </summary>
-        public bool NoDebugInfo { get; }
-
-        /// <summary>
-        /// When non-empty, instructs BuildCookRun to emit its archive layout to this directory.
-        /// </summary>
-        public string? ArchiveDirectory { get; }
-
-        /// <summary>
-        /// Overrides the cooker executable path when one specific cooker configuration should drive the cook.
-        /// </summary>
-        public string? UnrealExePath { get; }
-
-        /// <summary>
-        /// Supplies extra raw cooker arguments for flows that need one targeted cooker behavior toggle.
-        /// </summary>
-        public string? AdditionalCookerOptions { get; }
-
-        /// <summary>
-        /// Overrides the root directory that BuildCookRun uses for staged package output.
-        /// </summary>
-        public string? StagingDirectory { get; }
-
-        /// <summary>
-        /// Overrides the platform-specific directory that the cook commandlet writes cooked payloads into.
-        /// </summary>
-        public string? CookOutputDirectory { get; }
-
-        /// <summary>
-        /// Returns whether this invocation still enters the compile phase and therefore needs the shared Unreal build lock.
-        /// </summary>
-        public bool RequiresBuildLock => HasPhase(BuildCookRunProjectPhases.Build);
-
-        /// <summary>
-        /// Returns whether one specific BuildCookRun phase is enabled for the request.
-        /// </summary>
-        public bool HasPhase(BuildCookRunProjectPhases phase)
-        {
-            return (Phases & phase) == phase;
-        }
-    }
-
     /// <summary>
     /// Centralizes project-oriented BuildCookRun command assembly so concrete operations can differ only in which phases
     /// they run and which option groups they expose.
@@ -148,7 +54,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
                across different engine installs. */
             yield return UnrealExecutionLocks.GetAutomationToolLock(GetRequiredTargetEngineInstall(operationParameters));
 
-            if (GetBuildCookRunRequest(operationParameters).RequiresBuildLock)
+            if (GetBuildCookRunRequest(operationParameters).HasPhase(BuildCookRunProjectPhases.Build))
             {
                 yield return UnrealExecutionLocks.GlobalBuild;
             }
@@ -182,88 +88,9 @@ namespace LocalAutomation.Extensions.Unreal.Operations.BaseOperations
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             Project project = GetRequiredTarget(operationParameters);
             BuildCookRunProjectRequest request = GetBuildCookRunRequest(operationParameters);
-            Arguments arguments = new();
-
-            arguments.SetArgument("BuildCookRun");
-            arguments.SetKeyPath("project", project.Model.UProjectPath);
-            ApplyPhaseArguments(arguments, request);
-
-            // BuildCookRun forwards UBT-specific switches through its ubtargs parameter.
-            if (request.HasPhase(BuildCookRunProjectPhases.Build)
-                && operationParameters.GetOptions<BuildOptions>().NoHotReload)
-            {
-                arguments.SetKeyValue("ubtargs", "-NoHotReload");
-            }
-
-            string configuration = request.Configuration.ToString();
-            arguments.SetKeyValue("clientconfig", configuration);
-            arguments.SetKeyValue("serverconfig", configuration);
-
-            if (request.NoDebugInfo)
-            {
-                arguments.SetFlag("NoDebugInfo");
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.ArchiveDirectory))
-            {
-                arguments.SetFlag("archive");
-                arguments.SetKeyPath("archivedirectory", request.ArchiveDirectory!);
-            }
-
-            // Optional staging and cook roots let composed workflows keep run-specific package data out of source trees.
-            if (!string.IsNullOrWhiteSpace(request.StagingDirectory))
-            {
-                arguments.SetKeyPath("stagingdirectory", request.StagingDirectory!);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.CookOutputDirectory))
-            {
-                arguments.SetKeyPath("CookOutputDir", request.CookOutputDirectory!);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.UnrealExePath))
-            {
-                arguments.SetKeyPath("unrealexe", request.UnrealExePath!);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.AdditionalCookerOptions))
-            {
-                arguments.SetKeyValue("additionalcookeroptions", request.AdditionalCookerOptions!);
-            }
-
-            arguments.ApplyCommonUATArguments(engine);
+            Arguments arguments = UATArguments.CreateBuildCookRunArguments(project.Model, engine, request,
+                request.HasPhase(BuildCookRunProjectPhases.Build) && operationParameters.GetOptions<BuildOptions>().NoHotReload);
             return new Command(engine.GetRunUATPath(), arguments.ToString());
-        }
-
-        /// <summary>
-        /// Applies one flag per enabled BuildCookRun phase so the request shape stays readable and reusable.
-        /// </summary>
-        private static void ApplyPhaseArguments(Arguments arguments, BuildCookRunProjectRequest request)
-        {
-            if (request.HasPhase(BuildCookRunProjectPhases.Build))
-            {
-                arguments.SetFlag("build");
-            }
-
-            if (request.HasPhase(BuildCookRunProjectPhases.Cook))
-            {
-                arguments.SetFlag("cook");
-            }
-
-            if (request.HasPhase(BuildCookRunProjectPhases.Stage))
-            {
-                arguments.SetFlag("stage");
-            }
-
-            if (request.HasPhase(BuildCookRunProjectPhases.Pak))
-            {
-                arguments.SetFlag("pak");
-            }
-
-            if (request.HasPhase(BuildCookRunProjectPhases.Package))
-            {
-                arguments.SetFlag("package");
-            }
         }
     }
 

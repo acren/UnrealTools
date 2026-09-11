@@ -1,13 +1,8 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
-using LocalAutomation.Core.IO;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using Microsoft.Extensions.Logging;
-using UnrealAutomationCommon;
-using UnrealAutomationCommon.Unreal;
+using SystemUtilities.Processes;
+using UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -26,29 +21,17 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
 
             global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters = context.ValidatedOperationParameters;
             Project project = GetRequiredTarget(operationParameters);
-            Engine engine = project.EngineInstance ?? throw new InvalidOperationException("Clean Project requires a resolved engine install.");
+            Engine engine = GetRequiredTargetEngineInstall(operationParameters);
 
-            // Clean targets
-            string cleanPath = Path.Combine(engine.GetBuildFolder(), "BatchFiles", "Clean.bat");
-            string editorTargetName = project.Model.ProjectDescriptor?.EditorTargetName
-                ?? throw new InvalidOperationException("Clean Project requires a loaded project descriptor.");
-            List<string> targets = new List<string>() { project.Name, editorTargetName };
-            foreach (string target in targets)
+            // The Common recipe owns target/configuration ordering; this adapter executes each resulting command.
+            foreach (Command command in UbtArguments.CreateCleanCommands(project.Model, engine))
             {
-                foreach (BuildConfiguration configuration in EnumUtils.GetAll<BuildConfiguration>())
-                {
-                    string cleanParams = $"{target} Win64 {configuration} -project=\"{project.Model.UProjectPath}\" -WaitMutex";
-                    RunProcess.RunAndWait(cleanPath, cleanParams);
-                }
+                RunProcess.RunAndWait(command.File, command.Arguments);
             }
 
             context.Logger.LogInformation("Deleting intermediate folders");
 
-            // Delete intermediate folders
-            foreach (string path in Directory.GetDirectories(project.Model.ProjectPath, "Intermediate", SearchOption.AllDirectories))
-            {
-                FileUtils.DeleteDirectory(path);
-            }
+            project.Model.CleanIntermediateDirectories();
 
             context.Logger.LogInformation("Cleaning complete");
 
