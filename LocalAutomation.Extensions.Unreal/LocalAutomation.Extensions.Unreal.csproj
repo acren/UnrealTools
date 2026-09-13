@@ -18,6 +18,7 @@
     <ProjectReference Include="..\LocalAutomation.Extensions.Abstractions\LocalAutomation.Extensions.Abstractions.csproj" />
     <ProjectReference Include="..\LocalAutomation.Runtime\LocalAutomation.Runtime.csproj" />
     <ProjectReference Include="..\UnrealUtilities\UnrealUtilities.csproj" />
+    <ProjectReference Include="..\UnrealPluginFlattening\UnrealPluginFlattening\UnrealPluginFlattening.csproj" />
   </ItemGroup>
 
 </Project>

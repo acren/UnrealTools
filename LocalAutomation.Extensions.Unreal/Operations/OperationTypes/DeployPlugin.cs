@@ -12,6 +12,7 @@ using LocalAutomation.Extensions.Unreal.Unreal;
 using Microsoft.Extensions.Logging;
 using SystemUtilities.IO;
 using SystemUtilities.Processes;
+using UnrealPluginFlattening;
 using UnrealUtilities;
 using static LocalAutomation.Runtime.LoggingExtensions;
 using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
@@ -817,22 +818,105 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             context.Logger.LogInformation($"Workspace plugin: {workspacePluginPath}");
             context.Logger.LogInformation($"Staging destination: {stagingPluginPath}");
             using Plugin workspacePlugin = CreateRequiredPlugin(workspacePluginPath, "Workspace plugin is not available for staging");
-            using Project workspaceProject = CreateRequiredProject(state.Layout.WorkspaceProjectPath, "Workspace project is not available for plugin flattening");
             state.Layout.DistributablePluginPackageWorkspace.EnsureReady(context.Logger);
             string packageInputPluginPath = state.Layout.DistributablePluginPackageWorkspace.GetPath("HostProject", "Plugins", workspacePlugin.Name);
+            IReadOnlyList<MergePlugin> mergePlugins = ResolveMergePlugins(
+                state.HostProject.Model,
+                context.ValidatedOperationParameters.GetOptions<PluginDeployOptions>().MergePlugins);
             IReadOnlySet<string> mergePluginNames = PluginDeployment.StagePlugin(
                 state.SourcePlugin.Model,
                 workspacePlugin.Model,
-                state.HostProject.Model,
-                workspaceProject.Model,
                 state.Engine,
                 stagingPluginPath,
                 packageInputPluginPath,
-                context.ValidatedOperationParameters.GetOptions<PluginDeployOptions>().MergePlugins,
+                mergePlugins,
                 context.Logger,
                 context.CancellationToken);
             context.SetOperationData(new DeploymentPluginStagingState(mergePluginNames));
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Converts the target-local editing syntax into the flattener's explicit descriptor inputs before deployment begins.
+        /// </summary>
+        private static IReadOnlyList<MergePlugin> ResolveMergePlugins(UnrealUtilities.Project hostProject,
+            string mergePluginsText)
+        {
+            if (string.IsNullOrWhiteSpace(mergePluginsText))
+            {
+                return Array.Empty<MergePlugin>();
+            }
+
+            // The persisted value is presentation syntax; the reusable deployment step receives only source identities.
+            List<MergePlugin> mergePlugins = new();
+            foreach (string rawEntry in mergePluginsText.Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                string[] parts = rawEntry.Split(new[] { '=' }, 2, StringSplitOptions.TrimEntries);
+                if (string.IsNullOrWhiteSpace(parts[0]))
+                {
+                    continue;
+                }
+
+                string descriptorPath = ResolveMergePluginDescriptorPath(hostProject, parts[0]);
+                string? embeddedPrefix = parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]) ? parts[1] : null;
+                mergePlugins.Add(new MergePlugin(descriptorPath, embeddedPrefix));
+            }
+
+            return mergePlugins;
+        }
+
+        /// <summary>
+        /// Resolves one UI-entered plugin path or name without letting host option syntax leak into the deployment capability.
+        /// </summary>
+        private static string ResolveMergePluginDescriptorPath(UnrealUtilities.Project hostProject, string sourcePluginSpecifier)
+        {
+            foreach (string candidatePath in GetExplicitMergePluginPathCandidates(hostProject, sourcePluginSpecifier))
+            {
+                if (PluginPaths.Instance.IsTargetDirectory(candidatePath))
+                {
+                    return new UnrealUtilities.Plugin(Path.GetFullPath(candidatePath)).UPluginPath;
+                }
+            }
+
+            if (!Directory.Exists(hostProject.PluginsPath))
+            {
+                throw new DirectoryNotFoundException($"Could not resolve merge plugin '{sourcePluginSpecifier}' because '{hostProject.PluginsPath}' does not exist.");
+            }
+
+            string pluginName = Path.GetFileName(Path.TrimEndingDirectorySeparator(sourcePluginSpecifier));
+            string[] matches = Directory.GetDirectories(hostProject.PluginsPath, "*", SearchOption.AllDirectories)
+                .Where(PluginPaths.Instance.IsTargetDirectory)
+                .Where(path => string.Equals(Path.GetFileName(path), pluginName, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            return matches.Length switch
+            {
+                0 => throw new DirectoryNotFoundException($"Could not resolve merge plugin '{sourcePluginSpecifier}' under '{hostProject.PluginsPath}'."),
+                1 => new UnrealUtilities.Plugin(Path.GetFullPath(matches[0])).UPluginPath,
+                _ => throw new InvalidOperationException($"Merge plugin '{sourcePluginSpecifier}' is ambiguous: {string.Join(", ", matches)}")
+            };
+        }
+
+        /// <summary>
+        /// Interprets only rooted or directory-qualified values as paths so an unqualified plugin name cannot silently
+        /// select a top-level sibling when a grouped sibling has the same name.
+        /// </summary>
+        private static IEnumerable<string> GetExplicitMergePluginPathCandidates(UnrealUtilities.Project hostProject,
+            string sourcePluginSpecifier)
+        {
+            if (Path.IsPathRooted(sourcePluginSpecifier))
+            {
+                yield return sourcePluginSpecifier;
+                yield break;
+            }
+
+            if (!sourcePluginSpecifier.Contains(Path.DirectorySeparatorChar)
+                && !sourcePluginSpecifier.Contains(Path.AltDirectorySeparatorChar))
+            {
+                yield break;
+            }
+
+            yield return Path.Combine(hostProject.ProjectPath, sourcePluginSpecifier);
+            yield return Path.Combine(hostProject.PluginsPath, sourcePluginSpecifier);
         }
 
         /// <summary>

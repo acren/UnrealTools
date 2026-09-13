@@ -145,11 +145,12 @@ namespace UnrealUtilities
             return workspaceProject;
         }
 
-        /// <summary>Stages and stamps the target plugin, flattens configured inputs and returns merged sibling names.</summary>
-        public static IReadOnlySet<string> StagePlugin(Plugin sourcePlugin, Plugin workspacePlugin, Project sourceProject,
-            Project workspaceProject, Engine engine, string stagingPluginPath, string packageInputPluginPath,
-            string mergePlugins, ILogger logger, CancellationToken cancellationToken = default)
+        /// <summary>Stages and stamps the target plugin, flattens resolved inputs and returns merged sibling names.</summary>
+        public static IReadOnlySet<string> StagePlugin(Plugin sourcePlugin, Plugin workspacePlugin, Engine engine,
+            string stagingPluginPath, string packageInputPluginPath,
+            IReadOnlyList<UnrealPluginFlattening.MergePlugin> mergePlugins, ILogger logger, CancellationToken cancellationToken = default)
         {
+            ArgumentNullException.ThrowIfNull(mergePlugins);
             FileUtils.DeleteDirectoryIfExists(stagingPluginPath);
             FileUtils.MaterializeDirectory(workspacePlugin.PluginPath, stagingPluginPath, MaterializationSpecs.CreatePlugin(workspacePlugin), logger, cancellationToken);
             logger.LogInformation($"Copied plugin to staging destination: {stagingPluginPath}");
@@ -161,10 +162,23 @@ namespace UnrealUtilities
             Plugin stagingPlugin = new(stagingPluginPath);
             UpdatePluginDescriptorForArchive(sourcePlugin.PluginDescriptor, stagingPlugin, engine.Version);
             logger.LogInformation("Refreshing BuildPlugin host plugin input from '{StagingPluginPath}' to '{PackageInputPluginPath}'.", stagingPlugin.PluginPath, packageInputPluginPath);
-            IReadOnlySet<string> mergePluginNames = PluginDeploymentFlattening.StagePluginForDeployment(
-                stagingPlugin, sourceProject, workspaceProject, packageInputPluginPath, mergePlugins, logger, cancellationToken);
+            if (mergePlugins.Count > 0)
+            {
+                logger.LogInformation("Flattening {MergePluginCount} merge plugin(s) into staged plugin '{PluginName}'.", mergePlugins.Count, stagingPlugin.Name);
+            }
+
+            // The flattener owns source validation and rewriting; its generated output is the persistent BuildPlugin input.
+            UnrealPluginFlattening.PluginFlattener.Flatten(stagingPlugin.UPluginPath, mergePlugins, packageInputPluginPath,
+                message => logger.LogInformation("{Message}", message), cancellationToken);
+            /* Archive creation needs an isolated source-only snapshot, while the persistent package input retains generated
+               build directories across runs. Mirror only the generated output for that archive-facing staging role. */
+            FileUtils.MaterializeDirectory(packageInputPluginPath, stagingPlugin.PluginPath,
+                MaterializationSpecs.CreatePlugin(packageInputPluginPath), logger, cancellationToken, mirrorDirectories: true);
+            stagingPlugin.LoadDescriptor();
             logger.LogInformation($"Updated plugin descriptor for staging: {stagingPlugin.PluginDescriptor.VersionName}");
-            return mergePluginNames;
+            return mergePlugins
+                .Select(mergePlugin => Path.GetFileNameWithoutExtension(mergePlugin.DescriptorPath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>Builds the distribution filename prefix using plugin version, engine version and nonstandard branch suffix.</summary>
