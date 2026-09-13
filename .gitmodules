@@ -1,0 +1,3 @@
+[submodule "UnrealPluginFlattening"]
+	path = UnrealPluginFlattening
+	url = https://github.com/acren/unreal-plugin-flattening.git
