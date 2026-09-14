@@ -6,11 +6,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using SystemUtilities.Formatting;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
-public static partial class FileUtils
+/// <summary>
+/// Reconciles explicit source selections into persistent destinations while preserving caller-owned paths.
+/// </summary>
+public static class FileMaterializer
 {
     /// <summary>
     /// Caps concurrent materialization entries so external copy tools cannot multiply without bound.
@@ -369,7 +371,7 @@ public static partial class FileUtils
             relativeFilePath => CopyMaterializedFile(Path.Combine(sourceRootPath, relativeFilePath), Path.Combine(destinationRootPath, relativeFilePath), cancellationToken));
 
         stopwatch.Stop();
-        logger.LogInformation("Copied {FileCount} file(s) in {Elapsed}.", normalizedRelativeFilePaths.Count, DurationFormatting.FormatSeconds(stopwatch.Elapsed));
+        logger.LogInformation("Copied {FileCount} file(s) in {Elapsed}.", normalizedRelativeFilePaths.Count, FormatDuration(stopwatch.Elapsed));
     }
 
     /// <summary>
@@ -398,15 +400,15 @@ public static partial class FileUtils
             logger.LogInformation("{Verb} directory entry '{RelativePath}' from '{SourcePath}' to '{DestinationPath}'.", verb, entryPath, sourcePath, destinationPath);
             if (mirrorDirectories)
             {
-                MirrorDirectory(sourcePath, destinationPath, excludedRelativePaths: entry.ExcludedRelativePaths, cancellationToken: cancellationToken);
+                DirectoryMaterializer.Mirror(sourcePath, destinationPath, entry.ExcludedRelativePaths, cancellationToken);
             }
             else
             {
-                CopyDirectory(sourcePath, destinationPath, excludedRelativePaths: entry.ExcludedRelativePaths, cancellationToken: cancellationToken);
+                DirectoryMaterializer.Copy(sourcePath, destinationPath, entry.ExcludedRelativePaths, cancellationToken);
             }
 
             stopwatch.Stop();
-            logger.LogInformation("{CompletedVerb} directory entry '{RelativePath}' in {Elapsed}.", completedVerb, entryPath, DurationFormatting.FormatSeconds(stopwatch.Elapsed));
+            logger.LogInformation("{CompletedVerb} directory entry '{RelativePath}' in {Elapsed}.", completedVerb, entryPath, FormatDuration(stopwatch.Elapsed));
             return;
         }
 
@@ -422,7 +424,7 @@ public static partial class FileUtils
             logger.LogInformation("Copying file entry '{RelativePath}' from '{SourcePath}' to '{DestinationPath}'.", entryPath, sourcePath, destinationPath);
             CopyMaterializedFile(sourcePath, destinationPath, cancellationToken);
             stopwatch.Stop();
-            logger.LogInformation("Copied file entry '{RelativePath}' in {Elapsed}.", entryPath, DurationFormatting.FormatSeconds(stopwatch.Elapsed));
+            logger.LogInformation("Copied file entry '{RelativePath}' in {Elapsed}.", entryPath, FormatDuration(stopwatch.Elapsed));
             return;
         }
 
@@ -527,7 +529,7 @@ public static partial class FileUtils
 
         if (Directory.Exists(destinationFilePath))
         {
-            DeleteDirectoryIfExists(destinationFilePath);
+            Directory.Delete(destinationFilePath, true);
         }
 
         File.Copy(sourceFilePath, destinationFilePath, true);
@@ -542,10 +544,21 @@ public static partial class FileUtils
         if (File.Exists(destinationPath))
         {
             logger.LogInformation("Deleting stale file entry: {FilePath}", destinationPath);
-            DeleteFileIfExists(destinationPath);
+            File.Delete(destinationPath);
             return;
         }
 
-        DeleteDirectoryIfExists(destinationPath, logger);
+        if (Directory.Exists(destinationPath))
+        {
+            logger.LogInformation("Deleting directory: {DirectoryPath}", destinationPath);
+            Directory.Delete(destinationPath, true);
+        }
+    }
+
+    // Keep elapsed-time text stable without coupling this focused library to broader formatting utilities.
+    private static string FormatDuration(TimeSpan duration)
+    {
+        TimeSpan resolved = duration < TimeSpan.Zero ? TimeSpan.Zero : duration;
+        return $"{resolved.TotalSeconds:0.00} s";
     }
 }

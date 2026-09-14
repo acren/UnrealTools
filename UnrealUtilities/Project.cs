@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using FileMaterialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SystemUtilities.IO;
@@ -154,7 +155,8 @@ namespace UnrealUtilities
         /// <summary>Copies plugin files into this project's plugin directory with overwrite enabled.</summary>
         public void AddPlugin(string pluginPath)
         {
-            FileUtils.CopyDirectory(pluginPath, PluginsPath, true);
+            string destinationPath = Path.Combine(PluginsPath, new DirectoryInfo(pluginPath).Name);
+            DirectoryMaterializer.Copy(pluginPath, destinationPath);
         }
 
         /// <summary>Copies the supplied plugin's files into this project.</summary>

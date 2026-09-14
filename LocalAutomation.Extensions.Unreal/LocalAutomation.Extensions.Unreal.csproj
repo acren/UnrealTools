@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FileMaterialization\FileMaterialization.csproj" />
     <ProjectReference Include="..\SystemUtilities\SystemUtilities.csproj" />
     <ProjectReference Include="..\LocalAutomation.Commands\LocalAutomation.Commands.csproj" />
     <ProjectReference Include="..\LocalAutomation.Core\LocalAutomation.Core.csproj" />

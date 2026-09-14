@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
 /// <summary>
 /// Identifies how one materialization entry participates in destination reconciliation.

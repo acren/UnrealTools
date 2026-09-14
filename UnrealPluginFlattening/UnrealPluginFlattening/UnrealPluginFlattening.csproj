@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- UE 5.4 AutomationTool runs on .NET 6; newer consumers can use the same assembly. -->
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>UnrealPluginFlattening</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Sam Bonifacio</Authors>
+    <Description>Flatten Unreal plugin source dependencies into a co-installable plugin while preserving incremental build inputs.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/acren/UnrealTools</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

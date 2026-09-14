@@ -6,7 +6,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
 /// <summary>
 /// Owns the Windows-native robocopy fast path for large directory copies.
@@ -84,8 +84,10 @@ internal static class WindowsDirectoryCopy
             using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start robocopy.");
             using CancellationTokenRegistration cancellationRegistration = cancellationToken.Register(() => KillProcessTree(process));
             // Read redirected streams while robocopy runs so Windows cannot block the copy on a full output pipe.
-            var standardOutputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var standardErrorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            /* The cancellation registration terminates the process tree, which closes both streams on .NET 6 where
+               StreamReader does not yet expose the cancellation-token overload. */
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
             try
             {
                 process.WaitForExitAsync(cancellationToken).GetAwaiter().GetResult();

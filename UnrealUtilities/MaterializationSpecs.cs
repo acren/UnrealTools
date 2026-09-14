@@ -2,8 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FileMaterialization;
 using Newtonsoft.Json;
-using SystemUtilities.IO;
+using UnrealMaterialization;
 
 namespace UnrealUtilities
 {
@@ -24,22 +25,10 @@ namespace UnrealUtilities
             bool includeProjectEditorBuildOutputs = false,
             bool includePluginBuildOutputs = false)
         {
-            FileMaterializationSpec spec = new()
-            {
-                { Path.GetFileName(project.UProjectPath), true },
-                { "Config", true },
-                { "Source" },
-                { "Content" },
-                { Path.GetFileNameWithoutExtension(project.UProjectPath) + ".png" }
-            };
-
-            if (includedPluginNames != null)
-            {
-                // The project Plugins directory is an explicit materialization scope: selected plugins and preserved
-                // generated outputs may remain, while stale plugin roots from earlier workspace uses are pruned.
-                spec.Sync("Plugins");
-                AddProjectPluginEntries(project, spec, includedPluginNames, includePluginBuildOutputs);
-            }
+            FileMaterializationSpec spec = UnrealMaterializationSpecs.CreateProject(
+                project.UProjectPath,
+                includedPluginNames,
+                includePluginBuildOutputs);
 
             if (includeProjectEditorBuildOutputs)
             {
@@ -87,11 +76,7 @@ namespace UnrealUtilities
         /// </summary>
         public static IReadOnlySet<string> GetProjectPluginNames(Project project)
         {
-            return GetProjectPluginDirectories(project)
-                .Select(Path.GetFileName)
-                .Where(pluginName => !string.IsNullOrWhiteSpace(pluginName))
-                .Select(pluginName => pluginName!)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return UnrealMaterializationSpecs.GetProjectPluginNames(project.UProjectPath);
         }
 
         /// <summary>
@@ -105,7 +90,7 @@ namespace UnrealUtilities
                 throw new ArgumentNullException(nameof(plugin));
             }
 
-            return CreatePlugin(plugin.PluginPath, includeBuildOutputs);
+            return UnrealMaterializationSpecs.CreatePlugin(plugin.PluginPath, includeBuildOutputs);
         }
 
         /// <summary>
@@ -113,89 +98,7 @@ namespace UnrealUtilities
         /// </summary>
         public static FileMaterializationSpec CreatePlugin(string pluginDirectoryPath, bool includeBuildOutputs = false)
         {
-            if (pluginDirectoryPath == null)
-            {
-                throw new ArgumentNullException(nameof(pluginDirectoryPath));
-            }
-
-            string pluginDescriptorFileName = Path.GetFileName(PluginPaths.Instance.FindRequiredTargetFile(pluginDirectoryPath));
-            FileMaterializationSpec spec = new()
-            {
-                { pluginDescriptorFileName, true },
-                { "Source" },
-                { "Resources" },
-                { "Content" },
-                { "Config" },
-                { "Extras" }
-            };
-
-            if (includeBuildOutputs)
-            {
-                // Prebuilt project variants run packaging with editor compilation disabled, so each enabled code plugin
-                // must carry its already-built module binaries alongside its descriptor and authored content.
-                spec.Add("Binaries");
-                spec.Add("Build");
-            }
-
-            return spec;
-        }
-
-        /// <summary>
-        /// Expands the project Plugins tree into explicit plugin-subset entries and preserve rules so synchronized plugin
-        /// materialization removes omitted plugins without discarding generated outputs for included plugins.
-        /// </summary>
-        private static void AddProjectPluginEntries(Project project, FileMaterializationSpec spec, IReadOnlySet<string> includedPluginNames, bool includePluginBuildOutputs)
-        {
-            if (!Directory.Exists(project.PluginsPath))
-            {
-                return;
-            }
-
-            if (includedPluginNames.Count == 0)
-            {
-                return;
-            }
-
-            /* Preserve files that live directly under the project Plugins root while switching plugin directories to
-               explicit subset copies. */
-            foreach (string pluginsRootFilePath in Directory.GetFiles(project.PluginsPath).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                spec.Add(Path.Combine("Plugins", Path.GetFileName(pluginsRootFilePath)));
-            }
-
-            /* Discover plugins recursively so grouped plugin folders still materialize through explicit per-plugin
-               subsets rather than one broad recursive Plugins copy. */
-            foreach (string pluginDirectoryPath in GetProjectPluginDirectories(project)
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                string pluginName = Path.GetFileName(pluginDirectoryPath);
-                if (!includedPluginNames.Contains(pluginName))
-                {
-                    continue;
-                }
-
-                string relativePluginDirectoryPath = Path.GetRelativePath(project.PluginsPath, pluginDirectoryPath);
-                string relativeMaterializedPluginPath = Path.Combine("Plugins", relativePluginDirectoryPath);
-                spec.AddSubtree(relativeMaterializedPluginPath, CreatePlugin(pluginDirectoryPath, includePluginBuildOutputs));
-                PreservePluginGeneratedOutputs(spec, relativeMaterializedPluginPath, includePluginBuildOutputs);
-            }
-        }
-
-        /// <summary>
-        /// Preserves generated plugin output folders that are owned by Unreal builds rather than source materialization.
-        /// </summary>
-        private static void PreservePluginGeneratedOutputs(FileMaterializationSpec spec, string relativePluginDirectoryPath, bool includePluginBuildOutputs)
-        {
-            // Intermediate stays workspace-local even when built plugin binaries are copied from another prepared project.
-            spec.Preserve(Path.Combine(relativePluginDirectoryPath, "Intermediate"));
-            if (includePluginBuildOutputs)
-            {
-                return;
-            }
-
-            // When build outputs are not part of the copied input set, preserve the destination workspace's warm cache.
-            spec.Preserve(Path.Combine(relativePluginDirectoryPath, "Binaries"));
-            spec.Preserve(Path.Combine(relativePluginDirectoryPath, "Build"));
+            return UnrealMaterializationSpecs.CreatePlugin(pluginDirectoryPath, includeBuildOutputs);
         }
 
         /// <summary>
@@ -404,26 +307,5 @@ namespace UnrealUtilities
             public string Path { get; set; } = string.Empty;
         }
 
-        /// <summary>
-        /// Enumerates valid plugin directories beneath a project Plugins root while tolerating projects without plugins.
-        /// </summary>
-        private static IEnumerable<string> GetProjectPluginDirectories(Project project)
-        {
-            return GetProjectPluginDirectories(project.PluginsPath);
-        }
-
-        /// <summary>
-        /// Enumerates valid plugin directories beneath a Plugins root path.
-        /// </summary>
-        private static IEnumerable<string> GetProjectPluginDirectories(string pluginsPath)
-        {
-            if (!Directory.Exists(pluginsPath))
-            {
-                return Enumerable.Empty<string>();
-            }
-
-            return Directory.GetDirectories(pluginsPath, "*", SearchOption.AllDirectories)
-                .Where(PluginPaths.Instance.IsTargetDirectory);
-        }
     }
 }

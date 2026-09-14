@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
 /// <summary>
 /// Implements the portable recursive directory copy fallback used when no platform-specific fast path is available.
@@ -42,7 +42,7 @@ internal static class ManagedDirectoryCopy
             File.Delete(destinationPath);
         }
 
-        FileUtils.DeleteDirectoryIfExists(destinationPath);
+        if (Directory.Exists(destinationPath)) Directory.Delete(destinationPath, true);
         Copy(sourcePath, destinationPath, excludedRelativePaths, cancellationToken);
     }
 

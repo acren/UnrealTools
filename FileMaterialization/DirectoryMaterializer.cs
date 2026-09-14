@@ -4,12 +4,12 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
 /// <summary>
 /// Chooses the best available directory-copy implementation for the current platform while preserving one stable API.
 /// </summary>
-internal static class DirectoryCopy
+public static class DirectoryMaterializer
 {
     /// <summary>
     /// Copies one directory tree to another destination, preferring the platform fast path when available.

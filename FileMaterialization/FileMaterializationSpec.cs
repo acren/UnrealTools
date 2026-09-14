@@ -3,7 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 
-namespace SystemUtilities.IO;
+namespace FileMaterialization;
 
 /// <summary>
 /// Collects the ordered include, sync, and preserve entries that materialize one source root into one destination root.

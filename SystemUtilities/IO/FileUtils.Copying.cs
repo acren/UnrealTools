@@ -1,55 +1,19 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using FileMaterialization;
 
 namespace SystemUtilities.IO;
 
 public static partial class FileUtils
 {
     /// <summary>
-    /// Copies one directory tree to the destination path, optionally nesting the source directory inside the destination.
-    /// </summary>
-    public static void CopyDirectory(string sourcePath, string destinationPath, bool placeInside = false, IEnumerable<string>? excludedRelativePaths = null, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        (sourcePath, destinationPath) = ResolveDirectoryOperationPaths(sourcePath, destinationPath, placeInside);
-        DirectoryCopy.Copy(sourcePath, destinationPath, excludedRelativePaths, cancellationToken);
-    }
-
-    /// <summary>
-    /// Mirrors one directory tree to the destination path, deleting destination entries absent from the source tree.
-    /// </summary>
-    public static void MirrorDirectory(string sourcePath, string destinationPath, bool placeInside = false, IEnumerable<string>? excludedRelativePaths = null, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        (sourcePath, destinationPath) = ResolveDirectoryOperationPaths(sourcePath, destinationPath, placeInside);
-        DirectoryCopy.Mirror(sourcePath, destinationPath, excludedRelativePaths, cancellationToken);
-    }
-
-    /// <summary>
-    /// Normalizes directory operation paths and applies optional source-directory nesting consistently.
-    /// </summary>
-    private static (string SourcePath, string DestinationPath) ResolveDirectoryOperationPaths(string sourcePath, string destinationPath, bool placeInside)
-    {
-        sourcePath = Path.GetFullPath(sourcePath);
-        destinationPath = Path.GetFullPath(destinationPath);
-
-        if (placeInside)
-        {
-            string directoryName = new DirectoryInfo(sourcePath).Name;
-            destinationPath = Path.Combine(destinationPath, directoryName);
-        }
-
-        return (sourcePath, destinationPath);
-    }
-
-    /// <summary>
     /// Copies one named subdirectory from a source root into the matching location beneath the destination root.
     /// </summary>
     public static void CopySubdirectory(string sourcePath, string destinationPath, string subdirectory)
     {
         Directory.CreateDirectory(Path.Combine(destinationPath, subdirectory));
-        CopyDirectory(Path.Combine(sourcePath, subdirectory), Path.Combine(destinationPath, subdirectory));
+        DirectoryMaterializer.Copy(Path.Combine(sourcePath, subdirectory), Path.Combine(destinationPath, subdirectory));
     }
 
     /// <summary>

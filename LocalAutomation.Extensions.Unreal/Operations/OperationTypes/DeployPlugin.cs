@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using FileMaterialization;
 using LocalAutomation.Commands;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
@@ -1366,7 +1367,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             string snapshotPath = state.Layout.BlueprintTestPackageSnapshotPath;
 
             FileUtils.DeleteDirectoryIfExists(snapshotPath);
-            FileUtils.CopyDirectory(blueprintPackage.TargetPath, snapshotPath, cancellationToken: context.CancellationToken);
+            DirectoryMaterializer.Copy(blueprintPackage.TargetPath, snapshotPath, cancellationToken: context.CancellationToken);
 
             using Package snapshotPackage = CreateRequiredPackage(snapshotPath, "Blueprint package test snapshot was not created successfully");
             context.Logger.LogInformation($"Prepared blueprint package test snapshot: {snapshotPackage.TargetPath}");

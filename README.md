@@ -1,6 +1,12 @@
 # Unreal Tools
 Unreal Engine and local automation tools made for personal convenience.
 
+## Reusable libraries
+
+- `FileMaterialization` reconciles explicit filesystem inputs into persistent generated directories.
+- `UnrealMaterialization` defines reusable authored Unreal project and plugin payload policies.
+- `UnrealPluginFlattening` embeds source-only Unreal plugin dependencies into a generated plugin.
+
 ## Formatting
 
 This repository uses `.editorconfig` as the source of truth for C# formatting rules and `dotnet format` as the standard formatter.

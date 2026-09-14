@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading;
+using FileMaterialization;
 using Microsoft.Extensions.Logging;
 using Semver;
 using SystemUtilities.IO;
@@ -86,7 +87,7 @@ public static class DeploymentVerification
            project-owned receipts and executables. The destination retains its own root build-output cache. */
         FileMaterializationSpec projectInputs = MaterializationSpecs.CreateProject(source, includedPluginNames, includePluginBuildOutputs: true);
         logger.LogInformation("Refreshing verification project workspace from '{SourceProjectPath}' to '{WorkspacePath}'.", source.ProjectPath, destinationPath);
-        FileUtils.MaterializeDirectory(source.ProjectPath, destinationPath, projectInputs, logger, cancellationToken, mirrorDirectories: true);
+        FileMaterializer.MaterializeDirectory(source.ProjectPath, destinationPath, projectInputs, logger, cancellationToken, mirrorDirectories: true);
 
         if (!ProjectPaths.Instance.IsTargetDirectory(destinationPath))
         {

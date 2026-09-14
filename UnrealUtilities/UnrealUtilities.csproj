@@ -5,6 +5,8 @@
   </PropertyGroup>
 	
   <ItemGroup>
+    <ProjectReference Include="..\FileMaterialization\FileMaterialization.csproj" />
+    <ProjectReference Include="..\UnrealMaterialization\UnrealMaterialization.csproj" />
     <ProjectReference Include="..\SystemUtilities\SystemUtilities.csproj" />
     <ProjectReference Include="..\UnrealPluginFlattening\UnrealPluginFlattening\UnrealPluginFlattening.csproj" />
   </ItemGroup>
