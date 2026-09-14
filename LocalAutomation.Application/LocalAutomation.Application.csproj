@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="SB.SystemUtilities" Version="$(SBUnrealLibrariesVersion)" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
@@ -16,7 +17,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LocalAutomation.Commands\LocalAutomation.Commands.csproj" />
-    <ProjectReference Include="..\SystemUtilities\SystemUtilities.csproj" />
     <ProjectReference Include="..\LocalAutomation.Core\LocalAutomation.Core.csproj" />
     <ProjectReference Include="..\LocalAutomation.Persistence\LocalAutomation.Persistence.csproj" />
     <ProjectReference Include="..\LocalAutomation.Extensions.Abstractions\LocalAutomation.Extensions.Abstractions.csproj" />

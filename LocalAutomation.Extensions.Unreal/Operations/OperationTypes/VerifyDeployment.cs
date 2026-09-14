@@ -10,7 +10,7 @@ using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
 using Microsoft.Extensions.Logging;
-using UnrealUtilities;
+using SB.UnrealUtilities;
 using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
 using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
@@ -174,7 +174,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             EngineVersion resolvedEngineVersion = engine.Version ?? throw new Exception("Engine version is not available");
             context.Logger.LogInformation($"Verifying plugin {plugin.Name} for {resolvedEngineVersion.MajorMinorString}");
 
-            UnrealUtilities.Plugin installedPlugin = DeploymentVerification.ValidateInstalledPlugin(plugin.Model, engine);
+            SB.UnrealUtilities.Plugin installedPlugin = DeploymentVerification.ValidateInstalledPlugin(plugin.Model, engine);
             string pluginVersionName = plugin.Model.PluginDescriptor.VersionName;
             context.Logger.LogInformation($"Source plugin version: {pluginVersionName}");
             string installedPluginVersionName = (installedPlugin.PluginDescriptor ?? throw new Exception("Installed plugin descriptor is not loaded")).VersionName;
@@ -191,7 +191,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             string exampleProjectSourcePath = Path.Combine(temp, "ExampleProjectSource");
 
             // Archive inspection supplies a standalone model; only the prepared operation target needs a watcher.
-            UnrealUtilities.Project sourceProject = DeploymentVerification.ExtractExampleProject(
+            SB.UnrealUtilities.Project sourceProject = DeploymentVerification.ExtractExampleProject(
                 exampleProjectZip, exampleProjectSourcePath, context.Logger, context.CancellationToken);
 
             global::LocalAutomation.Runtime.Workspace preparedWorkspace = global::LocalAutomation.Runtime.Workspaces.Persistent(UnrealWorkspaceKeys.ProjectWorkspace(

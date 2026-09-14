@@ -35,7 +35,7 @@ function Resolve-IncludedPaths {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$solutionPath = Join-Path $repositoryRoot 'UnrealAutomationTools.sln'
+$solutionPath = Join-Path $repositoryRoot 'UnrealCommander.sln'
 
 if (-not (Test-Path -LiteralPath $solutionPath)) {
     throw "Could not find solution at '$solutionPath'."

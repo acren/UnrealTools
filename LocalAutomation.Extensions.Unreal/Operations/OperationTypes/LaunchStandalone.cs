@@ -1,7 +1,7 @@
 using System.Linq;
 using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
-using UnrealUtilities;
+using SB.UnrealUtilities;
 using Project = LocalAutomation.Extensions.Unreal.Targets.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
@@ -19,7 +19,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         }
 
         /// <summary>Launches the selected editor binary in standalone-game mode using the requested configuration.</summary>
-        protected override global::SystemUtilities.Processes.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
+        protected override global::SB.SystemUtilities.Processes.Command BuildCommand(global::LocalAutomation.Runtime.ValidatedOperationParameters operationParameters)
         {
             Engine engine = GetRequiredTargetEngineInstall(operationParameters);
             BuildConfiguration configuration = operationParameters.GetOptions<OperationOptionTypes.BuildConfigurationOptions>().Configuration;

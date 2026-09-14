@@ -6,20 +6,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="SB.FileMaterialization" Version="$(SBUnrealLibrariesVersion)" />
+    <PackageReference Include="SB.SystemUtilities" Version="$(SBUnrealLibrariesVersion)" />
+    <PackageReference Include="SB.UnrealPluginFlattening" Version="$(SBUnrealLibrariesVersion)" />
+    <PackageReference Include="SB.UnrealUtilities" Version="$(SBUnrealLibrariesVersion)" />
     <PackageReference Include="bodong.PropertyModels" Version="11.3.11.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FileMaterialization\FileMaterialization.csproj" />
-    <ProjectReference Include="..\SystemUtilities\SystemUtilities.csproj" />
     <ProjectReference Include="..\LocalAutomation.Commands\LocalAutomation.Commands.csproj" />
     <ProjectReference Include="..\LocalAutomation.Core\LocalAutomation.Core.csproj" />
     <ProjectReference Include="..\LocalAutomation.Extensions.Abstractions\LocalAutomation.Extensions.Abstractions.csproj" />
     <ProjectReference Include="..\LocalAutomation.Runtime\LocalAutomation.Runtime.csproj" />
-    <ProjectReference Include="..\UnrealUtilities\UnrealUtilities.csproj" />
-    <ProjectReference Include="..\UnrealPluginFlattening\UnrealPluginFlattening\UnrealPluginFlattening.csproj" />
   </ItemGroup>
 
 </Project>

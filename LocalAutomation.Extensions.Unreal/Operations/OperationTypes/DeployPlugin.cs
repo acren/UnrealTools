@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using FileMaterialization;
+using SB.FileMaterialization;
 using LocalAutomation.Commands;
 using LocalAutomation.Core;
 using LocalAutomation.Extensions.Abstractions;
@@ -11,10 +11,10 @@ using LocalAutomation.Extensions.Unreal.Operations.BaseOperations;
 using LocalAutomation.Extensions.Unreal.Operations.OperationOptionTypes;
 using LocalAutomation.Extensions.Unreal.Unreal;
 using Microsoft.Extensions.Logging;
-using SystemUtilities.IO;
-using SystemUtilities.Processes;
-using UnrealPluginFlattening;
-using UnrealUtilities;
+using SB.SystemUtilities.IO;
+using SB.SystemUtilities.Processes;
+using SB.UnrealPluginFlattening;
+using SB.UnrealUtilities;
 using static LocalAutomation.Runtime.LoggingExtensions;
 using Package = LocalAutomation.Extensions.Unreal.Targets.Package;
 using Plugin = LocalAutomation.Extensions.Unreal.Targets.Plugin;
@@ -840,7 +840,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         /// <summary>
         /// Converts the target-local editing syntax into the flattener's explicit descriptor inputs before deployment begins.
         /// </summary>
-        private static IReadOnlyList<MergePlugin> ResolveMergePlugins(UnrealUtilities.Project hostProject,
+        private static IReadOnlyList<MergePlugin> ResolveMergePlugins(SB.UnrealUtilities.Project hostProject,
             string mergePluginsText)
         {
             if (string.IsNullOrWhiteSpace(mergePluginsText))
@@ -869,13 +869,13 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         /// <summary>
         /// Resolves one UI-entered plugin path or name without letting host option syntax leak into the deployment capability.
         /// </summary>
-        private static string ResolveMergePluginDescriptorPath(UnrealUtilities.Project hostProject, string sourcePluginSpecifier)
+        private static string ResolveMergePluginDescriptorPath(SB.UnrealUtilities.Project hostProject, string sourcePluginSpecifier)
         {
             foreach (string candidatePath in GetExplicitMergePluginPathCandidates(hostProject, sourcePluginSpecifier))
             {
                 if (PluginPaths.Instance.IsTargetDirectory(candidatePath))
                 {
-                    return new UnrealUtilities.Plugin(Path.GetFullPath(candidatePath)).UPluginPath;
+                    return new SB.UnrealUtilities.Plugin(Path.GetFullPath(candidatePath)).UPluginPath;
                 }
             }
 
@@ -892,7 +892,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
             return matches.Length switch
             {
                 0 => throw new DirectoryNotFoundException($"Could not resolve merge plugin '{sourcePluginSpecifier}' under '{hostProject.PluginsPath}'."),
-                1 => new UnrealUtilities.Plugin(Path.GetFullPath(matches[0])).UPluginPath,
+                1 => new SB.UnrealUtilities.Plugin(Path.GetFullPath(matches[0])).UPluginPath,
                 _ => throw new InvalidOperationException($"Merge plugin '{sourcePluginSpecifier}' is ambiguous: {string.Join(", ", matches)}")
             };
         }
@@ -901,7 +901,7 @@ namespace LocalAutomation.Extensions.Unreal.Operations.OperationTypes
         /// Interprets only rooted or directory-qualified values as paths so an unqualified plugin name cannot silently
         /// select a top-level sibling when a grouped sibling has the same name.
         /// </summary>
-        private static IEnumerable<string> GetExplicitMergePluginPathCandidates(UnrealUtilities.Project hostProject,
+        private static IEnumerable<string> GetExplicitMergePluginPathCandidates(SB.UnrealUtilities.Project hostProject,
             string sourcePluginSpecifier)
         {
             if (Path.IsPathRooted(sourcePluginSpecifier))

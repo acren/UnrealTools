@@ -1,6 +1,6 @@
 param(
     # Default to the full solution so one command exercises every test project unless the caller narrows it.
-    [string]$Target = 'UnrealAutomationTools.sln',
+    [string]$Target = 'UnrealCommander.sln',
 
     # Allows one focused rerun without editing the script. Example: FullyQualifiedName~ExecutionPlanSchedulerTests.Foo
     [string]$Filter,

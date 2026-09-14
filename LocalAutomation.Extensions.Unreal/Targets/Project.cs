@@ -5,10 +5,10 @@ using LocalAutomation.Extensions.Abstractions;
 using LocalAutomation.Runtime;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
-using SystemUtilities.IO;
-using UnrealUtilities;
-using EngineModel = UnrealUtilities.Engine;
-using ProjectModel = UnrealUtilities.Project;
+using SB.SystemUtilities.IO;
+using SB.UnrealUtilities;
+using EngineModel = SB.UnrealUtilities.Engine;
+using ProjectModel = SB.UnrealUtilities.Project;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 
@@ -96,7 +96,7 @@ public class Project : OperationTarget, IPackageProvider, IEngineInstanceProvide
     /// <summary>Wraps the staged model only when a runtime operation requests package provision.</summary>
     public Package? GetProvidedPackage(EngineModel engineContext)
     {
-        UnrealUtilities.Package? package = Model.GetStagedPackage(engineContext);
+        SB.UnrealUtilities.Package? package = Model.GetStagedPackage(engineContext);
         return package == null ? null : new Package(package);
     }
 

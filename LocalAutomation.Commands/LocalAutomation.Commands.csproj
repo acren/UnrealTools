@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SystemUtilities\SystemUtilities.csproj" />
+    <PackageReference Include="SB.SystemUtilities" Version="$(SBUnrealLibrariesVersion)" />
     <ProjectReference Include="..\LocalAutomation.Core\LocalAutomation.Core.csproj" />
     <ProjectReference Include="..\LocalAutomation.Runtime\LocalAutomation.Runtime.csproj" />
   </ItemGroup>

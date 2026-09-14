@@ -1,5 +1,5 @@
 using LocalAutomation.Runtime;
-using EngineModel = UnrealUtilities.Engine;
+using EngineModel = SB.UnrealUtilities.Engine;
 
 namespace LocalAutomation.Extensions.Unreal.Targets;
 

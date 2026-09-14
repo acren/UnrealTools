@@ -3,6 +3,8 @@
     <!-- Keep nullable context enabled consistently across the solution now that every project shares the same
          .NET 10 baseline. -->
     <Nullable>enable</Nullable>
+    <!-- Keep the public Unreal library release train aligned while allowing command-line or environment overrides. -->
+    <SBUnrealLibrariesVersion Condition="'$(SBUnrealLibrariesVersion)' == ''">0.1.0</SBUnrealLibrariesVersion>
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory).editorconfig')">
