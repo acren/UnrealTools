@@ -114,14 +114,16 @@ namespace UnrealUtilities
             logger.LogInformation($"Source Plugins directory: {hostProject.PluginsPath}");
             IReadOnlySet<string> includedSiblingPluginNames = GetIncludedSiblingPluginNames(hostProject, plugin.Name, includeOtherPlugins, excludePlugins);
             logger.LogInformation($"Copying host project to workspace: {workspaceProjectPath}");
-            FileMaterializer.MaterializeDirectory(hostProject.ProjectPath, workspaceProjectPath, MaterializationSpecs.CreateProject(hostProject, includedSiblingPluginNames), logger, cancellationToken);
+            FileMaterializer.MaterializeDirectory(hostProject.ProjectPath, workspaceProjectPath, MaterializationSpecs.CreateProject(hostProject, includedSiblingPluginNames),
+                message => logger.LogInformation("{Message}", message), cancellationToken);
 
             // The target plugin is always included, independently of sibling selection.
             string workspacePluginsPath = Path.Combine(workspaceProjectPath, "Plugins");
             string workspacePluginPath = Path.Combine(workspacePluginsPath, plugin.Name);
             Directory.CreateDirectory(workspacePluginsPath);
             logger.LogInformation($"Materializing target plugin into workspace: {workspacePluginPath}");
-            FileMaterializer.MaterializeDirectory(plugin.PluginPath, workspacePluginPath, MaterializationSpecs.CreatePlugin(plugin), logger, cancellationToken);
+            FileMaterializer.MaterializeDirectory(plugin.PluginPath, workspacePluginPath, MaterializationSpecs.CreatePlugin(plugin),
+                message => logger.LogInformation("{Message}", message), cancellationToken);
             logger.LogInformation($"Finished copying host project to workspace: {workspaceProjectPath}");
             if (!Directory.Exists(workspacePluginsPath))
             {
@@ -153,7 +155,8 @@ namespace UnrealUtilities
         {
             ArgumentNullException.ThrowIfNull(mergePlugins);
             FileUtils.DeleteDirectoryIfExists(stagingPluginPath);
-            FileMaterializer.MaterializeDirectory(workspacePlugin.PluginPath, stagingPluginPath, MaterializationSpecs.CreatePlugin(workspacePlugin), logger, cancellationToken);
+            FileMaterializer.MaterializeDirectory(workspacePlugin.PluginPath, stagingPluginPath, MaterializationSpecs.CreatePlugin(workspacePlugin),
+                message => logger.LogInformation("{Message}", message), cancellationToken);
             logger.LogInformation($"Copied plugin to staging destination: {stagingPluginPath}");
             if (!PluginPaths.Instance.IsTargetDirectory(stagingPluginPath))
             {
@@ -174,7 +177,7 @@ namespace UnrealUtilities
             /* Archive creation needs an isolated source-only snapshot, while the persistent package input retains generated
                build directories across runs. Mirror only the generated output for that archive-facing staging role. */
             FileMaterializer.MaterializeDirectory(packageInputPluginPath, stagingPlugin.PluginPath,
-                MaterializationSpecs.CreatePlugin(packageInputPluginPath), logger, cancellationToken, mirrorDirectories: true);
+                MaterializationSpecs.CreatePlugin(packageInputPluginPath), message => logger.LogInformation("{Message}", message), cancellationToken, mirrorDirectories: true);
             stagingPlugin.LoadDescriptor();
             logger.LogInformation($"Updated plugin descriptor for staging: {stagingPlugin.PluginDescriptor.VersionName}");
             return mergePlugins
@@ -223,7 +226,8 @@ namespace UnrealUtilities
             IReadOnlySet<string> mergedPluginNames, ILogger logger, CancellationToken cancellationToken = default)
         {
             IReadOnlySet<string> includedSiblingPluginNames = GetIncludedSiblingPluginNames(hostProject, sourcePlugin.Name, includeOtherPlugins, excludePlugins, mergedPluginNames);
-            FileMaterializer.MaterializeDirectory(workspaceProject.ProjectPath, exampleProjectPath, MaterializationSpecs.CreateProject(workspaceProject, includedSiblingPluginNames), logger, cancellationToken, mirrorDirectories: true);
+            FileMaterializer.MaterializeDirectory(workspaceProject.ProjectPath, exampleProjectPath, MaterializationSpecs.CreateProject(workspaceProject, includedSiblingPluginNames),
+                message => logger.LogInformation("{Message}", message), cancellationToken, mirrorDirectories: true);
             if (!ProjectPaths.Instance.IsTargetDirectory(exampleProjectPath))
             {
                 throw new InvalidOperationException($"Project-plugin base was not materialized successfully: {exampleProjectPath}");
@@ -243,7 +247,8 @@ namespace UnrealUtilities
         {
             string installedPluginPath = Path.Combine(project.PluginsPath, builtPlugin.Name);
             Directory.CreateDirectory(project.PluginsPath);
-            FileMaterializer.MaterializeDirectory(builtPlugin.PluginPath, installedPluginPath, MaterializationSpecs.CreatePlugin(builtPlugin, includeBuildOutputs: true), logger, cancellationToken, mirrorDirectories: true);
+            FileMaterializer.MaterializeDirectory(builtPlugin.PluginPath, installedPluginPath, MaterializationSpecs.CreatePlugin(builtPlugin, includeBuildOutputs: true),
+                message => logger.LogInformation("{Message}", message), cancellationToken, mirrorDirectories: true);
             if (!PluginPaths.Instance.IsTargetDirectory(installedPluginPath))
             {
                 throw new InvalidOperationException($"Built plugin was not installed into the project-plugin base successfully: {installedPluginPath}");
@@ -288,7 +293,8 @@ namespace UnrealUtilities
         {
             IReadOnlySet<string> includedPluginNames = MaterializationSpecs.GetProjectPluginNames(sourceProject);
             FileMaterializer.MaterializeDirectory(sourceProject.ProjectPath, destinationPath,
-                MaterializationSpecs.CreateProject(sourceProject, includedPluginNames, includeProjectEditorBuildOutputs: true, includePluginBuildOutputs: true), logger, cancellationToken, mirrorDirectories: true);
+                MaterializationSpecs.CreateProject(sourceProject, includedPluginNames, includeProjectEditorBuildOutputs: true, includePluginBuildOutputs: true),
+                message => logger.LogInformation("{Message}", message), cancellationToken, mirrorDirectories: true);
             if (!ProjectPaths.Instance.IsTargetDirectory(destinationPath))
             {
                 throw new InvalidOperationException($"{failureMessage}: {destinationPath}");
@@ -342,7 +348,8 @@ namespace UnrealUtilities
             FileUtils.DeleteDirectoryIfExists(archiveProjectPath, logger);
             // Source example archives omit root project binaries but must keep each code plugin's packaged module outputs.
             FileMaterializationSpec archiveProjectSpec = MaterializationSpecs.CreateProject(blueprintVariant, MaterializationSpecs.GetProjectPluginNames(blueprintVariant), includePluginBuildOutputs: true);
-            FileMaterializer.MaterializeDirectory(blueprintVariant.ProjectPath, archiveProjectPath, archiveProjectSpec, logger, cancellationToken, mirrorDirectories: true);
+            FileMaterializer.MaterializeDirectory(blueprintVariant.ProjectPath, archiveProjectPath, archiveProjectSpec,
+                message => logger.LogInformation("{Message}", message), cancellationToken, mirrorDirectories: true);
             if (!ProjectPaths.Instance.IsTargetDirectory(archiveProjectPath))
             {
                 throw new InvalidOperationException($"Example-project archive copy is not available: {archiveProjectPath}");

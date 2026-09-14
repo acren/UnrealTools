@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 
 namespace FileMaterialization;
 
@@ -36,7 +35,7 @@ public static class FileMaterializer
         string sourceRootPath,
         string destinationRootPath,
         FileMaterializationSpec spec,
-        ILogger logger,
+        Action<string> log,
         CancellationToken cancellationToken = default,
         bool mirrorDirectories = false)
     {
@@ -45,9 +44,9 @@ public static class FileMaterializer
             throw new ArgumentNullException(nameof(spec));
         }
 
-        if (logger == null)
+        if (log == null)
         {
-            throw new ArgumentNullException(nameof(logger));
+            throw new ArgumentNullException(nameof(log));
         }
 
         sourceRootPath = Path.GetFullPath(sourceRootPath);
@@ -55,7 +54,7 @@ public static class FileMaterializer
         Directory.CreateDirectory(destinationRootPath);
 
         // Sync roots are explicit deletion boundaries: only paths represented by entries or preserves survive there.
-        PruneSynchronizedRoots(sourceRootPath, destinationRootPath, spec, logger, cancellationToken);
+        PruneSynchronizedRoots(sourceRootPath, destinationRootPath, spec, log, cancellationToken);
 
         // Each spec entry remains the copy unit so the materialization contract stays direct and predictable.
         Parallel.ForEach(
@@ -65,13 +64,13 @@ public static class FileMaterializer
                 CancellationToken = cancellationToken,
                 MaxDegreeOfParallelism = MaxConcurrentMaterializationEntries
             },
-            entry => MaterializeEntry(sourceRootPath, destinationRootPath, entry, logger, cancellationToken, mirrorDirectories));
+            entry => MaterializeEntry(sourceRootPath, destinationRootPath, entry, log, cancellationToken, mirrorDirectories));
     }
 
     /// <summary>
     /// Deletes destination files and directories beneath synchronized roots when no entry or preserve rule covers them.
     /// </summary>
-    private static void PruneSynchronizedRoots(string sourceRootPath, string destinationRootPath, FileMaterializationSpec spec, ILogger logger, CancellationToken cancellationToken)
+    private static void PruneSynchronizedRoots(string sourceRootPath, string destinationRootPath, FileMaterializationSpec spec, Action<string> log, CancellationToken cancellationToken)
     {
         IEnumerable<string> syncRoots = spec.Entries
             .Where(entry => entry.Kind == FileMaterializationEntryKind.Sync)
@@ -82,7 +81,7 @@ public static class FileMaterializer
             string destinationSyncRootPath = Path.Combine(destinationRootPath, DenormalizeRelativePath(syncRoot));
             if (File.Exists(destinationSyncRootPath))
             {
-                DeleteDestinationEntry(destinationSyncRootPath, logger);
+                DeleteDestinationEntry(destinationSyncRootPath, log);
                 continue;
             }
 
@@ -97,8 +96,8 @@ public static class FileMaterializer
                 continue;
             }
 
-            logger.LogInformation("Pruning synchronized directory '{RelativePath}' at '{DestinationPath}'.", syncRoot, destinationSyncRootPath);
-            PruneSynchronizedDirectory(destinationSyncRootPath, destinationSyncRootPath, coverage, logger, cancellationToken);
+            log($"Pruning synchronized directory '{syncRoot}' at '{destinationSyncRootPath}'.");
+            PruneSynchronizedDirectory(destinationSyncRootPath, destinationSyncRootPath, coverage, log, cancellationToken);
         }
     }
 
@@ -165,7 +164,7 @@ public static class FileMaterializer
     /// <summary>
     /// Recursively prunes one synchronized destination directory while retaining covered paths and their ancestors.
     /// </summary>
-    private static void PruneSynchronizedDirectory(string syncRootPath, string currentDirectoryPath, IReadOnlyList<SyncCoverageRule> coverage, ILogger logger, CancellationToken cancellationToken)
+    private static void PruneSynchronizedDirectory(string syncRootPath, string currentDirectoryPath, IReadOnlyList<SyncCoverageRule> coverage, Action<string> log, CancellationToken cancellationToken)
     {
         foreach (string childPath in Directory.EnumerateFileSystemEntries(currentDirectoryPath).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
         {
@@ -174,7 +173,7 @@ public static class FileMaterializer
             bool isDirectory = Directory.Exists(childPath);
             if (ConflictsWithRecursiveSource(relativePath, isDirectory, coverage))
             {
-                DeleteDestinationEntry(childPath, logger);
+                DeleteDestinationEntry(childPath, log);
                 continue;
             }
 
@@ -185,7 +184,7 @@ public static class FileMaterializer
 
             if (isDirectory && HasCoveredDescendant(relativePath, coverage))
             {
-                PruneSynchronizedDirectory(syncRootPath, childPath, coverage, logger, cancellationToken);
+                PruneSynchronizedDirectory(syncRootPath, childPath, coverage, log, cancellationToken);
                 continue;
             }
 
@@ -194,7 +193,7 @@ public static class FileMaterializer
                 continue;
             }
 
-            DeleteDestinationEntry(childPath, logger);
+            DeleteDestinationEntry(childPath, log);
         }
     }
 
@@ -340,7 +339,7 @@ public static class FileMaterializer
         string sourceRootPath,
         string destinationRootPath,
         IEnumerable<string> relativeFilePaths,
-        ILogger logger,
+        Action<string> log,
         CancellationToken cancellationToken = default)
     {
         if (relativeFilePaths == null)
@@ -348,9 +347,9 @@ public static class FileMaterializer
             throw new ArgumentNullException(nameof(relativeFilePaths));
         }
 
-        if (logger == null)
+        if (log == null)
         {
-            throw new ArgumentNullException(nameof(logger));
+            throw new ArgumentNullException(nameof(log));
         }
 
         sourceRootPath = Path.GetFullPath(sourceRootPath);
@@ -358,7 +357,7 @@ public static class FileMaterializer
         IReadOnlyList<string> normalizedRelativeFilePaths = NormalizeMaterializedFilePaths(sourceRootPath, relativeFilePaths);
         Directory.CreateDirectory(destinationRootPath);
         Stopwatch stopwatch = Stopwatch.StartNew();
-        logger.LogInformation("Copying {FileCount} file(s) from '{SourceRootPath}' to '{DestinationRootPath}'.", normalizedRelativeFilePaths.Count, sourceRootPath, destinationRootPath);
+        log($"Copying {normalizedRelativeFilePaths.Count} file(s) from '{sourceRootPath}' to '{destinationRootPath}'.");
 
         // Package payloads are often many small files; direct parallel file copies avoid serial per-file latency.
         Parallel.ForEach(
@@ -371,13 +370,13 @@ public static class FileMaterializer
             relativeFilePath => CopyMaterializedFile(Path.Combine(sourceRootPath, relativeFilePath), Path.Combine(destinationRootPath, relativeFilePath), cancellationToken));
 
         stopwatch.Stop();
-        logger.LogInformation("Copied {FileCount} file(s) in {Elapsed}.", normalizedRelativeFilePaths.Count, FormatDuration(stopwatch.Elapsed));
+        log($"Copied {normalizedRelativeFilePaths.Count} file(s) in {FormatDuration(stopwatch.Elapsed)}.");
     }
 
     /// <summary>
     /// Materializes one explicit file or directory entry into the destination root.
     /// </summary>
-    private static void MaterializeEntry(string sourceRootPath, string destinationRootPath, FileMaterializationEntry entry, ILogger logger, CancellationToken cancellationToken, bool mirrorDirectories)
+    private static void MaterializeEntry(string sourceRootPath, string destinationRootPath, FileMaterializationEntry entry, Action<string> log, CancellationToken cancellationToken, bool mirrorDirectories)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (entry.Kind != FileMaterializationEntryKind.Include)
@@ -397,7 +396,7 @@ public static class FileMaterializer
         {
             string verb = mirrorDirectories ? "Mirroring" : "Copying";
             string completedVerb = mirrorDirectories ? "Mirrored" : "Copied";
-            logger.LogInformation("{Verb} directory entry '{RelativePath}' from '{SourcePath}' to '{DestinationPath}'.", verb, entryPath, sourcePath, destinationPath);
+            log($"{verb} directory entry '{entryPath}' from '{sourcePath}' to '{destinationPath}'.");
             if (mirrorDirectories)
             {
                 DirectoryMaterializer.Mirror(sourcePath, destinationPath, entry.ExcludedRelativePaths, cancellationToken);
@@ -408,7 +407,7 @@ public static class FileMaterializer
             }
 
             stopwatch.Stop();
-            logger.LogInformation("{CompletedVerb} directory entry '{RelativePath}' in {Elapsed}.", completedVerb, entryPath, FormatDuration(stopwatch.Elapsed));
+            log($"{completedVerb} directory entry '{entryPath}' in {FormatDuration(stopwatch.Elapsed)}.");
             return;
         }
 
@@ -421,10 +420,10 @@ public static class FileMaterializer
                 throw new InvalidOperationException($"File materialization entry cannot define excluded paths: {entryPath}");
             }
 
-            logger.LogInformation("Copying file entry '{RelativePath}' from '{SourcePath}' to '{DestinationPath}'.", entryPath, sourcePath, destinationPath);
+            log($"Copying file entry '{entryPath}' from '{sourcePath}' to '{destinationPath}'.");
             CopyMaterializedFile(sourcePath, destinationPath, cancellationToken);
             stopwatch.Stop();
-            logger.LogInformation("Copied file entry '{RelativePath}' in {Elapsed}.", entryPath, FormatDuration(stopwatch.Elapsed));
+            log($"Copied file entry '{entryPath}' in {FormatDuration(stopwatch.Elapsed)}.");
             return;
         }
 
@@ -437,7 +436,7 @@ public static class FileMaterializer
         // Mirror mode treats absent optional entries as stale destination inputs; overlay mode keeps the historic no-op.
         if (mirrorDirectories)
         {
-            DeleteDestinationEntry(destinationPath, logger);
+            DeleteDestinationEntry(destinationPath, log);
         }
     }
 
@@ -539,18 +538,18 @@ public static class FileMaterializer
     /// <summary>
     /// Deletes one destination file or directory entry when the matching optional source entry is absent.
     /// </summary>
-    private static void DeleteDestinationEntry(string destinationPath, ILogger logger)
+    private static void DeleteDestinationEntry(string destinationPath, Action<string> log)
     {
         if (File.Exists(destinationPath))
         {
-            logger.LogInformation("Deleting stale file entry: {FilePath}", destinationPath);
+            log($"Deleting stale file entry: {destinationPath}");
             File.Delete(destinationPath);
             return;
         }
 
         if (Directory.Exists(destinationPath))
         {
-            logger.LogInformation("Deleting directory: {DirectoryPath}", destinationPath);
+            log($"Deleting directory: {destinationPath}");
             Directory.Delete(destinationPath, true);
         }
     }
